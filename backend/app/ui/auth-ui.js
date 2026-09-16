@@ -48,6 +48,7 @@ function applyRoleControls() {
 
   qs('#new-application')?.classList.toggle('hidden', !admin);
   qs('#new-connection')?.classList.toggle('hidden', !admin);
+  qs('#new-investigation')?.classList.toggle('hidden', !(admin || investigator));
   qs('#users-nav')?.classList.toggle('hidden', !admin || !authState.enabled);
 
   document.querySelectorAll('#applications-view button.danger,#connections-view button.danger').forEach(button => button.classList.toggle('hidden', !admin));
