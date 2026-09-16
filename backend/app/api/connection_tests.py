@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 from app.applications.repository import ConnectionRepository
 from app.applications.runtime import RuntimeConnectionResolver
 from app.db.session import SessionLocal
+from app.integrations.elastic_apm.provider import ElasticAPMProvider
 from app.integrations.elasticsearch.provider import ElasticsearchLogsProvider
 from app.integrations.kubernetes.factory import KubernetesProviderFactory
 from app.integrations.llm.factory import LLMProviderFactory
@@ -28,6 +29,8 @@ async def test_connection(connection_id: int):
                 result = PrometheusProvider(runtime["config"], runtime["credentials"]).test_connection()
             elif provider_type in {"elasticsearch", "elastic"}:
                 result = ElasticsearchLogsProvider(runtime["config"], runtime["credentials"]).test_connection()
+            elif provider_type == "elastic_apm":
+                result = ElasticAPMProvider(runtime["config"], runtime["credentials"]).test_connection()
             elif provider_type == "kubernetes":
                 ToolPolicy.assert_allowed("kubernetes", "list_namespaces")
                 result = KubernetesProviderFactory.create(runtime).test_connection()
@@ -36,10 +39,6 @@ async def test_connection(connection_id: int):
             else:
                 raise ValueError(f"Connection test is not implemented for provider {provider_type}")
 
-            return {
-                "connection_id": connection_id,
-                "name": connection.name,
-                **result,
-            }
+            return {"connection_id": connection_id, "name": connection.name, **result}
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

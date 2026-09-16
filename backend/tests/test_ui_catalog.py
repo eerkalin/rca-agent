@@ -6,12 +6,15 @@ from app.api.provider_catalog import PROVIDERS
 def test_provider_catalog_matches_runtime_keys():
     prometheus = next(item for item in PROVIDERS if item["provider_type"] == "prometheus")
     elasticsearch = next(item for item in PROVIDERS if item["provider_type"] == "elasticsearch")
+    elastic_apm = next(item for item in PROVIDERS if item["provider_type"] == "elastic_apm")
     kubernetes = next(item for item in PROVIDERS if item["provider_type"] == "kubernetes")
 
     prom_connection_fields = {item["name"] for item in prometheus["connection_fields"]}
     prom_tool_fields = {item["name"] for item in prometheus["tool_fields"]}
     es_connection_fields = {item["name"] for item in elasticsearch["connection_fields"]}
     es_tool_fields = {item["name"] for item in elasticsearch["tool_fields"]}
+    apm_connection_fields = {item["name"] for item in elastic_apm["connection_fields"]}
+    apm_tool_fields = {item["name"] for item in elastic_apm["tool_fields"]}
     k8s_connection_fields = {item["name"] for item in kubernetes["connection_fields"]}
     k8s_credential_fields = {item["name"] for item in kubernetes["credential_fields"]}
     k8s_tool_fields = {item["name"] for item in kubernetes["tool_fields"]}
@@ -20,6 +23,10 @@ def test_provider_catalog_matches_runtime_keys():
     assert {"queries", "lookback_minutes"} <= prom_tool_fields
     assert {"base_url", "verify_ssl", "timeout_seconds"} <= es_connection_fields
     assert {"index_pattern", "time_field", "size", "filters"} <= es_tool_fields
+    assert elastic_apm["implemented"] is True
+    assert elastic_apm["tool_types"] == ["traces"]
+    assert {"base_url", "verify_ssl", "timeout_seconds"} <= apm_connection_fields
+    assert {"index_pattern", "lookback_minutes", "max_traces", "trace_id_field", "filters"} <= apm_tool_fields
     assert {"mode", "context", "verify_ssl"} <= k8s_connection_fields
     assert {"kubeconfig"} <= k8s_credential_fields
     assert {"namespace", "tail_lines"} <= k8s_tool_fields
