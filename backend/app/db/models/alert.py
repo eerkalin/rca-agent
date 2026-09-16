@@ -12,7 +12,7 @@ class Alert(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
     application_id: Mapped[int | None] = mapped_column(
-        ForeignKey("applications.id"), nullable=True, index=True
+        ForeignKey("applications.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     source: Mapped[str] = mapped_column(
