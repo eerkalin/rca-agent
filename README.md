@@ -22,7 +22,7 @@ The data model supports application-specific bindings for:
 - Argo CD
 - Terraform
 
-Executable providers currently implemented:
+Executable evidence providers currently implemented:
 
 - Kubernetes
 - Elasticsearch Logs
@@ -38,7 +38,7 @@ RCA execution is read-only. `app/rca/tool_policy.py` explicitly allowlists diagn
 
 Connection credentials are not returned by APIs and are stored encrypted in `connections.credentials_ciphertext`. Encryption uses a Fernet master key supplied through `RCA_MASTER_KEY`. In Kubernetes, this key must be provided through a Kubernetes Secret, not Helm values.
 
-The master key, MySQL DSN, and LLM API credentials are RCA Agent bootstrap settings. They are intentionally separate from investigated-application configuration.
+The master key and MySQL DSN remain RCA Agent bootstrap settings. LLM API credentials are normally configured as encrypted Connections through the UI. `GEMINI_API_KEY` / `GEMINI_MODEL` remain only as an optional backward-compatible fallback for Applications without an LLM Connection.
 
 ## Web UI
 
@@ -48,7 +48,39 @@ Start the API and open:
 http://127.0.0.1:8000/ui/
 ```
 
-The UI manages Applications, Connections, Application Tools, dependencies, provider-specific settings and encrypted credentials. These settings are persisted in MySQL and take effect without restarting RCA Agent.
+The UI manages Applications, Connections, per-Application LLM selection, Application Tools, dependencies, provider-specific settings and encrypted credentials. These settings are persisted in MySQL and take effect without restarting RCA Agent.
+
+## Per-Application LLM providers
+
+Each Application can select its own reusable LLM Connection and application-specific model settings. The same RCA Agent instance can therefore use different providers/models for different Applications.
+
+Implemented LLM connection types:
+
+- Google Gemini
+- OpenAI (Responses API + Structured Outputs)
+- OpenAI-compatible Chat Completions APIs
+- Anthropic
+- Ollama / local LLM
+
+Connection-level settings such as base URL, default model, API version, TLS verification and timeouts are stored in `connections.config`. API keys/tokens are encrypted in `connections.credentials_ciphertext`.
+
+Application-specific settings are stored in `applications.llm_config`, currently including:
+
+- `model` override
+- `temperature`
+- `max_output_tokens`
+
+The selected reusable connection is stored in `applications.llm_connection_id`.
+
+Example topology:
+
+```text
+Application A -> Gemini Connection -> gemini model
+Application B -> OpenAI Connection -> OpenAI model
+Application C -> Ollama Connection -> local model
+```
+
+The selected Application LLM is used for both Kubernetes scope resolution and final RCA/5 Why analysis. Credentials are never copied into evidence or LLM application context.
 
 ## Investigation strategies
 
@@ -105,14 +137,15 @@ Swagger UI: `http://127.0.0.1:8000/docs`
 ## Application-aware flow
 
 1. Create an Application in `/ui/`.
-2. Create/reuse Connections.
-3. Bind only relevant tools to the Application.
-4. Add dependencies and their diagnostic bindings.
-5. Start Manual RCA with `application_id`, or send a Grafana alert containing one of:
+2. Create/reuse an LLM Connection and select it for the Application.
+3. Create/reuse evidence-source Connections.
+4. Bind only relevant tools to the Application.
+5. Add dependencies and their diagnostic bindings.
+6. Start Manual RCA with `application_id`, or send a Grafana alert containing one of:
    - `labels.application_id`
    - `labels.application_slug`
    - `labels.application`
-6. RCA runs asynchronously and stores status/evidence/result in MySQL.
+7. RCA runs asynchronously and stores status/evidence/result in MySQL.
 
 ## Prometheus connection
 
@@ -128,7 +161,7 @@ The provider uses only Elasticsearch `_search`; it does not expose index/documen
 
 ## Kubernetes runtime connections
 
-Kubernetes is now application-scoped. A Kubernetes Application Tool must reference a Kubernetes Connection, and different Applications may reference different clusters.
+Kubernetes is application-scoped. A Kubernetes Application Tool must reference a Kubernetes Connection, and different Applications may reference different clusters.
 
 Supported connection modes:
 
@@ -178,10 +211,10 @@ This allows one RCA Agent process to investigate multiple Applications in differ
 
 ## Testing connections
 
-The UI exposes **Test** for Prometheus, Elasticsearch and Kubernetes. The equivalent API is:
+The UI exposes **Test** for Prometheus, Elasticsearch, Kubernetes and implemented LLM providers. The equivalent API is:
 
 ```text
 POST /api/v1/connections/{connection_id}/test
 ```
 
-Kubernetes test performs read-only API access and does not reveal stored credentials.
+Connection tests never return stored credentials.
