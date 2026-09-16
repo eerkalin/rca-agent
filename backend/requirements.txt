@@ -1,0 +1,8 @@
+fastapi[standard]
+SQLAlchemy
+PyMySQL
+pydantic-settings
+alembic
+kubernetes
+google-genai
+cryptography
