@@ -1,0 +1,61 @@
+name: Backend CI
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: rca_agent
+          MYSQL_USER: rca_agent
+          MYSQL_PASSWORD: rca_agent_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -uroot -prootpassword"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      DATABASE_URL: mysql+pymysql://rca_agent:rca_agent_password@127.0.0.1:3306/rca_agent?charset=utf8mb4
+      GEMINI_API_KEY: ci-placeholder
+      GEMINI_MODEL: gemini-3.6-flash
+      RCA_MASTER_KEY: ci-placeholder
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Compile backend
+        run: python -m compileall -q backend/app
+
+      - name: Apply database migrations
+        working-directory: backend
+        run: alembic upgrade head
+
+      - name: Import FastAPI application
+        working-directory: backend
+        run: python -c "from app.main import app; print(app.title, app.version)"
