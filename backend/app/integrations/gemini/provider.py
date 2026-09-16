@@ -1,20 +1,21 @@
 import json
+import logging
+import time
 
 from google import genai
 from google.genai import types
 
 from app.config import settings
+from app.observability.logging import elapsed_ms, log_event
 from app.rca.rca_models import RCAResult
 from app.rca.scope_models import ScopeResolution
 
 
+logger = logging.getLogger(__name__)
+
+
 class GeminiProvider:
-    def __init__(
-        self,
-        config: dict | None = None,
-        credentials: dict | None = None,
-        application_config: dict | None = None,
-    ):
+    def __init__(self, config: dict | None = None, credentials: dict | None = None, application_config: dict | None = None):
         config = config or {}
         credentials = credentials or {}
         application_config = application_config or {}
@@ -27,36 +28,27 @@ class GeminiProvider:
         self.max_output_tokens = application_config.get("max_output_tokens") or config.get("max_output_tokens")
 
     def test_connection(self) -> dict:
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents="Reply only with OK",
-        )
-        return {
-            "connected": True,
-            "provider": "gemini",
-            "model": self.model,
-            "response": response.text,
-        }
+        started = time.perf_counter()
+        log_event(logger, logging.INFO, "gemini.test.start", "Gemini connection test started", model=self.model)
+        try:
+            response = self.client.models.generate_content(model=self.model, contents="Reply only with OK")
+            result = {"connected": True, "provider": "gemini", "model": self.model, "response": response.text}
+            log_event(logger, logging.INFO, "gemini.test.success", "Gemini connection test completed", model=self.model, elapsed_ms=elapsed_ms(started))
+            return result
+        except Exception as exc:
+            log_event(logger, logging.ERROR, "gemini.test.failure", "Gemini connection test failed", model=self.model, elapsed_ms=elapsed_ms(started), error_type=type(exc).__name__, error=str(exc))
+            logger.exception("Gemini connection test failed model=%s", self.model)
+            raise
 
     def _config(self, schema):
-        kwargs = {
-            "temperature": self.temperature,
-            "response_mime_type": "application/json",
-            "response_schema": schema,
-        }
+        kwargs = {"temperature": self.temperature, "response_mime_type": "application/json", "response_schema": schema}
         if self.max_output_tokens:
             kwargs["max_output_tokens"] = int(self.max_output_tokens)
         return types.GenerateContentConfig(**kwargs)
 
-    def analyze_rca(
-        self,
-        symptom: str,
-        evidence: list[dict],
-        application_context: dict,
-    ) -> RCAResult:
+    def analyze_rca(self, symptom: str, evidence: list[dict], application_context: dict) -> RCAResult:
         evidence_json = json.dumps(evidence, ensure_ascii=False, default=str)
         context_json = json.dumps(application_context, ensure_ascii=False, default=str)
-
         prompt = f"""
 You are an evidence-driven Root Cause Analysis system operating in READ-ONLY mode.
 
@@ -86,21 +78,20 @@ STRICT RULES:
 
 Return a concise technical RCA suitable for incident engineers.
 """
+        started = time.perf_counter()
+        log_event(logger, logging.INFO, "gemini.rca.start", "Gemini RCA analysis started", model=self.model, evidence_items=len(evidence))
+        try:
+            response = self.client.models.generate_content(model=self.model, contents=prompt, config=self._config(RCAResult))
+            result = RCAResult.model_validate_json(response.text)
+            log_event(logger, logging.INFO, "gemini.rca.success", "Gemini RCA analysis completed", model=self.model, elapsed_ms=elapsed_ms(started), insufficient_evidence=result.insufficient_evidence)
+            return result
+        except Exception as exc:
+            log_event(logger, logging.ERROR, "gemini.rca.failure", "Gemini RCA analysis failed", model=self.model, elapsed_ms=elapsed_ms(started), error_type=type(exc).__name__, error=str(exc))
+            logger.exception("Gemini RCA analysis failed model=%s", self.model)
+            raise
 
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-            config=self._config(RCAResult),
-        )
-        return RCAResult.model_validate_json(response.text)
-
-    def resolve_scope(
-        self,
-        alert_text: str,
-        technical_services: list[dict],
-    ) -> ScopeResolution:
+    def resolve_scope(self, alert_text: str, technical_services: list[dict]) -> ScopeResolution:
         inventory_json = json.dumps(technical_services, ensure_ascii=False)
-
         prompt = f"""
 You are the scope-resolution component of an RCA system.
 Your task is NOT root-cause analysis. Select only the most relevant Kubernetes services for investigation.
@@ -121,10 +112,14 @@ ALERT OR USER SYMPTOM:
 TECHNICAL INVENTORY:
 {inventory_json}
 """
-
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-            config=self._config(ScopeResolution),
-        )
-        return ScopeResolution.model_validate_json(response.text)
+        started = time.perf_counter()
+        log_event(logger, logging.INFO, "gemini.scope.start", "Gemini scope resolution started", model=self.model, inventory_size=len(technical_services))
+        try:
+            response = self.client.models.generate_content(model=self.model, contents=prompt, config=self._config(ScopeResolution))
+            result = ScopeResolution.model_validate_json(response.text)
+            log_event(logger, logging.INFO, "gemini.scope.success", "Gemini scope resolution completed", model=self.model, elapsed_ms=elapsed_ms(started), candidates=len(result.candidates), unresolved=result.unresolved)
+            return result
+        except Exception as exc:
+            log_event(logger, logging.ERROR, "gemini.scope.failure", "Gemini scope resolution failed", model=self.model, elapsed_ms=elapsed_ms(started), error_type=type(exc).__name__, error=str(exc))
+            logger.exception("Gemini scope resolution failed model=%s", self.model)
+            raise
