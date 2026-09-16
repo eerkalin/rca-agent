@@ -2,10 +2,12 @@ from sqlalchemy.orm import Session
 
 from app.applications.context import ApplicationContextService
 from app.applications.runtime import RuntimeConnectionResolver
+from app.config import settings
 from app.db.session import SessionLocal
 from app.integrations.elasticsearch.provider import ElasticsearchLogsProvider
 from app.integrations.gemini.provider import GeminiProvider
 from app.integrations.kubernetes.factory import KubernetesProviderFactory
+from app.integrations.llm.factory import LLMProviderFactory
 from app.integrations.prometheus.provider import PrometheusProvider
 from app.rca.evidence_collector import EvidenceCollector
 from app.rca.evidence_reducer import EvidenceReducer
@@ -17,7 +19,6 @@ class RCAOrchestrator:
     def __init__(self):
         self.scope_resolver = ScopeResolver()
         self.evidence_collector = EvidenceCollector()
-        self.llm = GeminiProvider()
         self._kubernetes_providers: dict[int, object] = {}
 
     @staticmethod
@@ -42,9 +43,31 @@ class RCAOrchestrator:
             "dependency_type": (dependency or {}).get("type"),
         }
 
-    def _analyze(self, query: str, evidence: list[dict], context: dict):
+    @staticmethod
+    def _legacy_llm():
+        return GeminiProvider(
+            config={"model": settings.gemini_model},
+            credentials={"api_key": settings.gemini_api_key},
+        )
+
+    def _llm_provider(self, db: Session, context: dict):
+        application = context["application"]
+        connection_id = application.get("llm_connection_id")
+        if connection_id is None:
+            # Backward-compatible migration path. New Applications should select
+            # an LLM connection in the UI.
+            return self._legacy_llm()
+        runtime = RuntimeConnectionResolver.resolve(db, connection_id)
+        return LLMProviderFactory.create(runtime, application.get("llm_config") or {})
+
+    @staticmethod
+    def _analyze(query: str, evidence: list[dict], context: dict, llm):
         compact_context = {
-            "application": context["application"],
+            "application": {
+                key: value
+                for key, value in context["application"].items()
+                if key not in {"llm_connection_id", "llm_config"}
+            },
             "enabled_tools": [
                 {
                     "tool_type": item["tool_type"],
@@ -55,7 +78,7 @@ class RCAOrchestrator:
             ],
             "dependencies": context["dependencies"],
         }
-        return self.llm.analyze_rca(
+        return llm.analyze_rca(
             symptom=query,
             evidence=EvidenceReducer.reduce(evidence),
             application_context=compact_context,
@@ -72,14 +95,12 @@ class RCAOrchestrator:
 
         runtime = RuntimeConnectionResolver.resolve(db, connection_id)
         if runtime.get("provider_type") != "kubernetes":
-            raise ValueError(
-                f"Connection {connection_id} is not a Kubernetes connection"
-            )
+            raise ValueError(f"Connection {connection_id} is not a Kubernetes connection")
         provider = KubernetesProviderFactory.create(runtime)
         self._kubernetes_providers[connection_id] = provider
         return provider
 
-    def _resolve_kubernetes_scope(self, db: Session, query: str, context: dict):
+    def _resolve_kubernetes_scope(self, db: Session, query: str, context: dict, llm):
         kubernetes_tool = ApplicationContextService.find_tool(
             context,
             tool_type="kubernetes",
@@ -93,24 +114,14 @@ class RCAOrchestrator:
         scope = self.scope_resolver.resolve(
             text=query,
             kubernetes=provider,
+            llm=llm,
             namespace=namespace,
         )
         return scope, list(scope.candidates)
 
-    def _collect_kubernetes(
-        self,
-        db: Session,
-        tool: dict,
-        candidates: list,
-        collect_all: bool,
-    ) -> list[dict]:
+    def _collect_kubernetes(self, db: Session, tool: dict, candidates: list, collect_all: bool) -> list[dict]:
         if not candidates:
-            return [
-                {
-                    "tool": self._tool_descriptor(tool),
-                    "error": "Kubernetes scope resolver did not identify a technical candidate",
-                }
-            ]
+            return [{"tool": self._tool_descriptor(tool), "error": "Kubernetes scope resolver did not identify a technical candidate"}]
 
         provider = self._kubernetes_provider(db, tool)
         selected = candidates if collect_all else candidates[:1]
@@ -136,40 +147,15 @@ class RCAOrchestrator:
             )
         return evidence
 
-    def _collect_non_kubernetes_tool(
-        self,
-        db: Session,
-        tool: dict,
-        query: str,
-        context: dict,
-        candidate=None,
-        dependency: dict | None = None,
-    ) -> list[dict]:
+    def _collect_non_kubernetes_tool(self, db: Session, tool: dict, query: str, context: dict, candidate=None, dependency: dict | None = None) -> list[dict]:
         descriptor = self._tool_descriptor(tool)
         connection = RuntimeConnectionResolver.resolve(db, tool.get("connection_id"))
         variables = self._variables(context, candidate=candidate, dependency=dependency)
 
         base = {
             "tool": descriptor,
-            "dependency": (
-                {
-                    "id": dependency.get("id"),
-                    "name": dependency.get("name"),
-                    "type": dependency.get("type"),
-                }
-                if dependency
-                else None
-            ),
-            "scope_candidate": (
-                {
-                    "service_name": candidate.service_name,
-                    "namespace": candidate.namespace,
-                    "confidence": candidate.confidence,
-                    "reason": candidate.reason,
-                }
-                if candidate
-                else {}
-            ),
+            "dependency": ({"id": dependency.get("id"), "name": dependency.get("name"), "type": dependency.get("type")} if dependency else None),
+            "scope_candidate": ({"service_name": candidate.service_name, "namespace": candidate.namespace, "confidence": candidate.confidence, "reason": candidate.reason} if candidate else {}),
         }
 
         try:
@@ -177,86 +163,28 @@ class RCAOrchestrator:
             provider_type = tool.get("provider_type")
 
             if tool_type == "metrics" and provider_type == "prometheus":
-                provider = PrometheusProvider(
-                    config=connection.get("config", {}),
-                    credentials=connection.get("credentials", {}),
-                )
-                metrics = self.evidence_collector.collect_prometheus(
-                    provider=provider,
-                    tool_config=tool.get("config", {}),
-                    variables=variables,
-                )
+                provider = PrometheusProvider(config=connection.get("config", {}), credentials=connection.get("credentials", {}))
+                metrics = self.evidence_collector.collect_prometheus(provider=provider, tool_config=tool.get("config", {}), variables=variables)
                 return [{**base, "metrics": metrics}]
 
             if tool_type == "logs" and provider_type in {"elasticsearch", "elastic"}:
-                provider = ElasticsearchLogsProvider(
-                    config=connection.get("config", {}),
-                    credentials=connection.get("credentials", {}),
-                )
-                logs = self.evidence_collector.collect_elasticsearch_logs(
-                    provider=provider,
-                    tool_config=tool.get("config", {}),
-                    symptom=query,
-                    variables=variables,
-                )
+                provider = ElasticsearchLogsProvider(config=connection.get("config", {}), credentials=connection.get("credentials", {}))
+                logs = self.evidence_collector.collect_elasticsearch_logs(provider=provider, tool_config=tool.get("config", {}), symptom=query, variables=variables)
                 return [{**base, "logs": logs}]
 
-            return [
-                {
-                    **base,
-                    "error": (
-                        f"Provider {provider_type} for tool {tool_type} is configured "
-                        "but not implemented in this RCA Agent version"
-                    ),
-                }
-            ]
+            return [{**base, "error": f"Provider {provider_type} for tool {tool_type} is configured but not implemented in this RCA Agent version"}]
         except Exception as exc:
             return [{**base, "error": str(exc)}]
 
-    def _collect_application_tool(
-        self,
-        db: Session,
-        tool: dict,
-        query: str,
-        context: dict,
-        candidates: list,
-        collect_all: bool,
-    ) -> list[dict]:
+    def _collect_application_tool(self, db: Session, tool: dict, query: str, context: dict, candidates: list, collect_all: bool) -> list[dict]:
         if tool.get("tool_type") == "kubernetes" and tool.get("provider_type") == "kubernetes":
-            return self._collect_kubernetes(
-                db=db,
-                tool=tool,
-                candidates=candidates,
-                collect_all=collect_all,
-            )
-
+            return self._collect_kubernetes(db=db, tool=tool, candidates=candidates, collect_all=collect_all)
         candidate = candidates[0] if candidates else None
-        return self._collect_non_kubernetes_tool(
-            db=db,
-            tool=tool,
-            query=query,
-            context=context,
-            candidate=candidate,
-        )
+        return self._collect_non_kubernetes_tool(db=db, tool=tool, query=query, context=context, candidate=candidate)
 
-    def _collect_dependency_tool(
-        self,
-        db: Session,
-        dependency: dict,
-        tool: dict,
-        query: str,
-        context: dict,
-        candidates: list,
-    ) -> list[dict]:
+    def _collect_dependency_tool(self, db: Session, dependency: dict, tool: dict, query: str, context: dict, candidates: list) -> list[dict]:
         candidate = candidates[0] if candidates else None
-        return self._collect_non_kubernetes_tool(
-            db=db,
-            tool=tool,
-            query=query,
-            context=context,
-            candidate=candidate,
-            dependency=dependency,
-        )
+        return self._collect_non_kubernetes_tool(db=db, tool=tool, query=query, context=context, candidate=candidate, dependency=dependency)
 
     def run(self, investigation_id: int) -> None:
         self._kubernetes_providers = {}
@@ -275,72 +203,31 @@ class RCAOrchestrator:
                 if not context["tools"]:
                     raise ValueError("Application has no enabled investigation tools")
 
-                scope, candidates = self._resolve_kubernetes_scope(
-                    db,
-                    investigation.query,
-                    context,
-                )
+                llm = self._llm_provider(db, context)
+                scope, candidates = self._resolve_kubernetes_scope(db, investigation.query, context, llm)
                 strategy = context["application"]["investigation_strategy"]
                 evidence: list[dict] = []
                 rca = None
 
                 if strategy == "collect_then_analyze":
                     for tool in context["tools"]:
-                        evidence.extend(
-                            self._collect_application_tool(
-                                db=db,
-                                tool=tool,
-                                query=investigation.query,
-                                context=context,
-                                candidates=candidates,
-                                collect_all=True,
-                            )
-                        )
-
+                        evidence.extend(self._collect_application_tool(db=db, tool=tool, query=investigation.query, context=context, candidates=candidates, collect_all=True))
                     for dependency in context["dependencies"]:
                         for tool in dependency.get("tools", []):
-                            evidence.extend(
-                                self._collect_dependency_tool(
-                                    db=db,
-                                    dependency=dependency,
-                                    tool=tool,
-                                    query=investigation.query,
-                                    context=context,
-                                    candidates=candidates,
-                                )
-                            )
-
-                    rca = self._analyze(investigation.query, evidence, context)
+                            evidence.extend(self._collect_dependency_tool(db=db, dependency=dependency, tool=tool, query=investigation.query, context=context, candidates=candidates))
+                    rca = self._analyze(investigation.query, evidence, context, llm)
                 else:
                     for tool in context["tools"]:
-                        evidence.extend(
-                            self._collect_application_tool(
-                                db=db,
-                                tool=tool,
-                                query=investigation.query,
-                                context=context,
-                                candidates=candidates,
-                                collect_all=False,
-                            )
-                        )
-                        rca = self._analyze(investigation.query, evidence, context)
+                        evidence.extend(self._collect_application_tool(db=db, tool=tool, query=investigation.query, context=context, candidates=candidates, collect_all=False))
+                        rca = self._analyze(investigation.query, evidence, context, llm)
                         if not rca.insufficient_evidence:
                             break
 
                     if rca is None or rca.insufficient_evidence:
                         for dependency in context["dependencies"]:
                             for tool in dependency.get("tools", []):
-                                evidence.extend(
-                                    self._collect_dependency_tool(
-                                        db=db,
-                                        dependency=dependency,
-                                        tool=tool,
-                                        query=investigation.query,
-                                        context=context,
-                                        candidates=candidates,
-                                    )
-                                )
-                                rca = self._analyze(investigation.query, evidence, context)
+                                evidence.extend(self._collect_dependency_tool(db=db, dependency=dependency, tool=tool, query=investigation.query, context=context, candidates=candidates))
+                                rca = self._analyze(investigation.query, evidence, context, llm)
                                 if not rca.insufficient_evidence:
                                     break
                             if rca is not None and not rca.insufficient_evidence:
@@ -355,6 +242,7 @@ class RCAOrchestrator:
                     scope={
                         "application_id": investigation.application_id,
                         "strategy": strategy,
+                        "llm_connection_id": context["application"].get("llm_connection_id"),
                         "resolved_scope": scope.model_dump() if scope is not None else None,
                     },
                     evidence=evidence,
