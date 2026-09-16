@@ -4,6 +4,7 @@ from app.integrations.llm.http_providers import (
     AnthropicProvider,
     OllamaProvider,
     OpenAICompatibleProvider,
+    OpenAIResponsesProvider,
 )
 
 
@@ -32,16 +33,18 @@ class LLMProviderFactory:
 
         if provider_type == "gemini":
             return GeminiProvider(config=config, credentials=credentials, model_config=model_config)
-        if provider_type in {"openai", "openai_compatible"}:
-            if provider_type == "openai" and not config.get("base_url"):
-                config = {**config, "base_url": "https://api.openai.com/v1"}
-            provider = OpenAICompatibleProvider(
+        if provider_type == "openai":
+            return OpenAIResponsesProvider(
                 config=config,
                 credentials=credentials,
                 model_config=model_config,
             )
-            provider.provider_type = provider_type
-            return provider
+        if provider_type == "openai_compatible":
+            return OpenAICompatibleProvider(
+                config=config,
+                credentials=credentials,
+                model_config=model_config,
+            )
         if provider_type == "anthropic":
             return AnthropicProvider(config=config, credentials=credentials, model_config=model_config)
         if provider_type == "ollama":
