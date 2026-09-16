@@ -19,7 +19,7 @@
   </div>
   <header class="topbar">
     <div><strong>RCA Agent</strong><span class="muted"> application-centric RCA</span></div>
-    <nav><button data-view="applications">Applications</button><button data-view="connections">Connections</button><button data-view="users" id="users-nav" class="hidden">Users</button></nav>
+    <nav><button data-view="applications">Applications</button><button data-view="connections">Connections</button><button data-view="investigations" id="investigations-nav">Investigations</button><button data-view="users" id="users-nav" class="hidden">Users</button></nav>
     <div id="session-controls" class="session-controls hidden"><span id="session-user"></span><button id="logout-button">Logout</button></div>
   </header>
   <main id="app-shell">
@@ -32,6 +32,12 @@
       <div class="section-head"><div><h1>Connections</h1><p>Reusable provider connections. Secrets are encrypted before they are stored in MySQL.</p></div><button id="new-connection">New connection</button></div>
       <div id="connections-list" class="cards"></div>
       <div id="connection-editor" class="panel hidden"></div>
+    </section>
+    <section id="investigations-view" class="view hidden">
+      <div class="section-head"><div><h1>Investigations</h1><p>Review automatic RCA runs and start manual investigations when your role allows it.</p></div><div class="actions compact-actions"><button id="refresh-investigations">Refresh</button><button id="new-investigation" class="primary">Run investigation</button></div></div>
+      <div id="investigations-list"></div>
+      <div id="investigation-editor" class="panel hidden"></div>
+      <div id="investigation-detail" class="panel hidden"></div>
     </section>
     <section id="users-view" class="view hidden">
       <div class="section-head"><div><h1>Users</h1><p>Administrators manage interactive access and RCA Agent roles.</p></div><button id="new-user">New user</button></div>
@@ -47,5 +53,6 @@
   <script src="/ui/friendly-ui.js"></script>
   <script src="/ui/binding-hardening.js"></script>
   <script src="/ui/auth-ui.js"></script>
+  <script src="/ui/investigations-ui.js"></script>
 </body>
 </html>
