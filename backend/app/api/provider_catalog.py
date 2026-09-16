@@ -7,6 +7,7 @@ router = APIRouter(tags=["provider-catalog"])
 PROVIDERS = [
     {
         "provider_type": "prometheus",
+        "category": "tool",
         "tool_types": ["metrics"],
         "label": "Prometheus",
         "implemented": True,
@@ -29,6 +30,7 @@ PROVIDERS = [
     },
     {
         "provider_type": "elasticsearch",
+        "category": "tool",
         "tool_types": ["logs"],
         "label": "Elasticsearch Logs",
         "implemented": True,
@@ -57,6 +59,7 @@ PROVIDERS = [
     },
     {
         "provider_type": "kubernetes",
+        "category": "tool",
         "tool_types": ["kubernetes"],
         "label": "Kubernetes",
         "implemented": True,
@@ -74,12 +77,115 @@ PROVIDERS = [
         ],
         "notes": "Use in_cluster when RCA Agent runs inside the target cluster. Use kubeconfig for external clusters; kubeconfig is encrypted in MySQL and loaded only in backend memory. Application tool must reference this Connection.",
     },
-    {"provider_type": "elastic_apm", "tool_types": ["traces"], "label": "Elastic APM", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
-    {"provider_type": "grafana", "tool_types": ["alerting"], "label": "Grafana", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
-    {"provider_type": "git", "tool_types": ["git"], "label": "Git", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
-    {"provider_type": "argocd", "tool_types": ["argocd"], "label": "Argo CD", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
-    {"provider_type": "terraform", "tool_types": ["terraform"], "label": "Terraform", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
-    {"provider_type": "hosts", "tool_types": ["hosts"], "label": "Host diagnostics", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
+    {
+        "provider_type": "gemini",
+        "category": "llm",
+        "tool_types": [],
+        "label": "Google Gemini",
+        "implemented": True,
+        "connection_fields": [
+            {"name": "default_model", "label": "Default model", "type": "text", "default": "gemini-3.6-flash"},
+        ],
+        "credential_fields": [
+            {"name": "api_key", "label": "Gemini API key", "type": "password", "required": True},
+        ],
+        "application_fields": [
+            {"name": "model", "label": "Model override", "type": "text", "required": False},
+            {"name": "temperature", "label": "Temperature", "type": "number", "default": 0.1},
+            {"name": "max_output_tokens", "label": "Max output tokens", "type": "number", "default": 4096},
+        ],
+    },
+    {
+        "provider_type": "openai",
+        "category": "llm",
+        "tool_types": [],
+        "label": "OpenAI",
+        "implemented": True,
+        "connection_fields": [
+            {"name": "base_url", "label": "Base URL", "type": "text", "default": "https://api.openai.com/v1"},
+            {"name": "default_model", "label": "Default model", "type": "text", "required": True},
+            {"name": "verify_ssl", "label": "Verify TLS certificate", "type": "boolean", "default": True},
+            {"name": "timeout_seconds", "label": "Timeout (seconds)", "type": "number", "default": 60},
+            {"name": "json_mode", "label": "Request JSON mode", "type": "boolean", "default": True},
+        ],
+        "credential_fields": [
+            {"name": "api_key", "label": "OpenAI API key", "type": "password", "required": True},
+        ],
+        "application_fields": [
+            {"name": "model", "label": "Model override", "type": "text", "required": False},
+            {"name": "temperature", "label": "Temperature", "type": "number", "default": 0.1},
+            {"name": "max_output_tokens", "label": "Max output tokens", "type": "number", "default": 4096},
+        ],
+    },
+    {
+        "provider_type": "openai_compatible",
+        "category": "llm",
+        "tool_types": [],
+        "label": "OpenAI-compatible",
+        "implemented": True,
+        "connection_fields": [
+            {"name": "base_url", "label": "Base URL", "type": "text", "required": True, "placeholder": "https://provider.example/v1"},
+            {"name": "default_model", "label": "Default model", "type": "text", "required": True},
+            {"name": "verify_ssl", "label": "Verify TLS certificate", "type": "boolean", "default": True},
+            {"name": "timeout_seconds", "label": "Timeout (seconds)", "type": "number", "default": 60},
+            {"name": "json_mode", "label": "Request JSON mode", "type": "boolean", "default": True},
+            {"name": "headers", "label": "Extra HTTP headers (JSON object)", "type": "json", "default": {}},
+        ],
+        "credential_fields": [
+            {"name": "api_key", "label": "API key", "type": "password", "required": False},
+        ],
+        "application_fields": [
+            {"name": "model", "label": "Model override", "type": "text", "required": False},
+            {"name": "temperature", "label": "Temperature", "type": "number", "default": 0.1},
+            {"name": "max_output_tokens", "label": "Max output tokens", "type": "number", "default": 4096},
+        ],
+    },
+    {
+        "provider_type": "anthropic",
+        "category": "llm",
+        "tool_types": [],
+        "label": "Anthropic",
+        "implemented": True,
+        "connection_fields": [
+            {"name": "base_url", "label": "Base URL", "type": "text", "default": "https://api.anthropic.com"},
+            {"name": "default_model", "label": "Default model", "type": "text", "required": True},
+            {"name": "anthropic_version", "label": "API version", "type": "text", "default": "2023-06-01"},
+            {"name": "verify_ssl", "label": "Verify TLS certificate", "type": "boolean", "default": True},
+            {"name": "timeout_seconds", "label": "Timeout (seconds)", "type": "number", "default": 60},
+        ],
+        "credential_fields": [
+            {"name": "api_key", "label": "Anthropic API key", "type": "password", "required": True},
+        ],
+        "application_fields": [
+            {"name": "model", "label": "Model override", "type": "text", "required": False},
+            {"name": "temperature", "label": "Temperature", "type": "number", "default": 0.1},
+            {"name": "max_output_tokens", "label": "Max output tokens", "type": "number", "default": 4096},
+        ],
+    },
+    {
+        "provider_type": "ollama",
+        "category": "llm",
+        "tool_types": [],
+        "label": "Ollama / local LLM",
+        "implemented": True,
+        "connection_fields": [
+            {"name": "base_url", "label": "Base URL", "type": "text", "default": "http://localhost:11434"},
+            {"name": "default_model", "label": "Default model", "type": "text", "required": True},
+            {"name": "timeout_seconds", "label": "Timeout (seconds)", "type": "number", "default": 120},
+        ],
+        "credential_fields": [],
+        "application_fields": [
+            {"name": "model", "label": "Model override", "type": "text", "required": False},
+            {"name": "temperature", "label": "Temperature", "type": "number", "default": 0.1},
+            {"name": "max_output_tokens", "label": "Max output tokens", "type": "number", "default": 4096},
+        ],
+    },
+    {"provider_type": "elastic_apm", "category": "tool", "tool_types": ["traces"], "label": "Elastic APM", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
+    {"provider_type": "grafana", "category": "tool", "tool_types": ["alerting"], "label": "Grafana", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
+    {"provider_type": "git", "category": "tool", "tool_types": ["git"], "label": "Git", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
+    {"provider_type": "argocd", "category": "tool", "tool_types": ["argocd"], "label": "Argo CD", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
+    {"provider_type": "terraform", "category": "tool", "tool_types": ["terraform"], "label": "Terraform", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
+    {"provider_type": "hosts", "category": "tool", "tool_types": ["hosts"], "label": "Host diagnostics", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
 ]
 
 
