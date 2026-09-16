@@ -1,10 +1,20 @@
+from app.integrations.elasticsearch.provider import ElasticsearchLogsProvider
 from app.integrations.kubernetes.provider import KubernetesProvider
+from app.integrations.prometheus.provider import PrometheusProvider
 from app.rca.tool_policy import ToolPolicy
 
 
 class EvidenceCollector:
     def __init__(self):
-        self.kubernetes = KubernetesProvider()
+        self._kubernetes = None
+
+    @property
+    def kubernetes(self) -> KubernetesProvider:
+        # Non-Kubernetes applications must not require kubeconfig or in-cluster
+        # credentials merely because the RCA Agent supports Kubernetes.
+        if self._kubernetes is None:
+            self._kubernetes = KubernetesProvider()
+        return self._kubernetes
 
     def collect_for_service(
         self,
@@ -102,3 +112,53 @@ class EvidenceCollector:
             "endpoints": endpoints,
             "pods": pod_evidence,
         }
+
+    @staticmethod
+    def collect_prometheus(
+        provider: PrometheusProvider,
+        tool_config: dict,
+        variables: dict,
+    ) -> dict:
+        ToolPolicy.assert_allowed("prometheus", "query_range")
+        queries = tool_config.get("queries") or []
+        if not queries:
+            return {
+                "provider": "prometheus",
+                "configured": False,
+                "reason": "No queries configured for this application/dependency",
+                "queries": [],
+            }
+        return provider.collect_configured_queries(
+            queries=queries,
+            variables=variables,
+            default_window_minutes=int(tool_config.get("lookback_minutes", 15)),
+        )
+
+    @staticmethod
+    def collect_elasticsearch_logs(
+        provider: ElasticsearchLogsProvider,
+        tool_config: dict,
+        symptom: str,
+        variables: dict,
+    ) -> dict:
+        ToolPolicy.assert_allowed("elasticsearch", "search_logs")
+
+        filters = dict(tool_config.get("filters") or {})
+        service_field = tool_config.get("service_field")
+        namespace_field = tool_config.get("namespace_field")
+
+        if service_field and variables.get("service_name"):
+            filters[service_field] = variables["service_name"]
+        if namespace_field and variables.get("namespace"):
+            filters[namespace_field] = variables["namespace"]
+
+        return provider.search_logs(
+            index_pattern=tool_config.get("index_pattern", ""),
+            symptom=symptom,
+            filters=filters,
+            lookback_minutes=int(tool_config.get("lookback_minutes", 15)),
+            size=int(tool_config.get("size", 200)),
+            time_field=tool_config.get("time_field", "@timestamp"),
+            message_fields=tool_config.get("message_fields"),
+            source_fields=tool_config.get("source_fields"),
+        )

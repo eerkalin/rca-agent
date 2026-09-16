@@ -3,6 +3,9 @@ class EvidenceReducer:
 
     MAX_LOG_CHARS = 12000
     MAX_EVENTS_PER_POD = 20
+    MAX_ELASTIC_HITS = 80
+    MAX_METRIC_SERIES = 30
+    MAX_SAMPLES_PER_SERIES = 40
 
     @classmethod
     def _compact_log(cls, value: str | None) -> str | None:
@@ -15,7 +18,6 @@ class EvidenceReducer:
             normalized = line.strip()
             if not normalized:
                 continue
-            # Exact duplicate suppression is safe and useful for repetitive logs.
             if normalized in seen:
                 continue
             seen.add(normalized)
@@ -27,40 +29,89 @@ class EvidenceReducer:
         return compact
 
     @classmethod
+    def _reduce_kubernetes(cls, item: dict) -> dict:
+        kubernetes = item.get("kubernetes", {})
+        pods = []
+        for pod in kubernetes.get("pods", []):
+            logs = {}
+            for container_name, container_logs in pod.get("logs", {}).items():
+                logs[container_name] = {
+                    "current": cls._compact_log(container_logs.get("current")),
+                    "previous": cls._compact_log(container_logs.get("previous")),
+                }
+            pods.append(
+                {
+                    "name": pod.get("name"),
+                    "phase": pod.get("phase"),
+                    "node_name": pod.get("node_name"),
+                    "conditions": pod.get("conditions", []),
+                    "containers": pod.get("containers", []),
+                    "events": pod.get("events", [])[-cls.MAX_EVENTS_PER_POD :],
+                    "logs": logs,
+                }
+            )
+
+        return {
+            "service_name": kubernetes.get("service_name"),
+            "namespace": kubernetes.get("namespace"),
+            "found": kubernetes.get("found"),
+            "endpoints": kubernetes.get("endpoints", []),
+            "pods": pods,
+        }
+
+    @classmethod
+    def _reduce_logs(cls, logs: dict) -> dict:
+        hits = logs.get("hits", [])[: cls.MAX_ELASTIC_HITS]
+        return {
+            "provider": logs.get("provider"),
+            "index_pattern": logs.get("index_pattern"),
+            "lookback_minutes": logs.get("lookback_minutes"),
+            "total": logs.get("total"),
+            "hits": hits,
+        }
+
+    @classmethod
+    def _reduce_metrics(cls, metrics: dict) -> dict:
+        queries = []
+        for query in metrics.get("queries", []):
+            reduced_result = []
+            for series in query.get("result", [])[: cls.MAX_METRIC_SERIES]:
+                compact = dict(series)
+                if isinstance(compact.get("values"), list):
+                    compact["values"] = compact["values"][-cls.MAX_SAMPLES_PER_SERIES :]
+                reduced_result.append(compact)
+            queries.append(
+                {
+                    "name": query.get("name"),
+                    "description": query.get("description"),
+                    "promql": query.get("promql"),
+                    "error": query.get("error"),
+                    "result": reduced_result,
+                }
+            )
+        return {
+            "provider": metrics.get("provider"),
+            "configured": metrics.get("configured", True),
+            "reason": metrics.get("reason"),
+            "queries": queries,
+        }
+
+    @classmethod
     def reduce(cls, evidence: list[dict]) -> list[dict]:
         reduced = []
         for item in evidence:
-            kubernetes = item.get("kubernetes", {})
-            pods = []
-            for pod in kubernetes.get("pods", []):
-                logs = {}
-                for container_name, container_logs in pod.get("logs", {}).items():
-                    logs[container_name] = {
-                        "current": cls._compact_log(container_logs.get("current")),
-                        "previous": cls._compact_log(container_logs.get("previous")),
-                    }
-                pods.append(
-                    {
-                        "name": pod.get("name"),
-                        "phase": pod.get("phase"),
-                        "node_name": pod.get("node_name"),
-                        "conditions": pod.get("conditions", []),
-                        "containers": pod.get("containers", []),
-                        "events": pod.get("events", [])[-cls.MAX_EVENTS_PER_POD :],
-                        "logs": logs,
-                    }
-                )
-
-            reduced.append(
-                {
-                    "scope_candidate": item.get("scope_candidate", {}),
-                    "kubernetes": {
-                        "service_name": kubernetes.get("service_name"),
-                        "namespace": kubernetes.get("namespace"),
-                        "found": kubernetes.get("found"),
-                        "endpoints": kubernetes.get("endpoints", []),
-                        "pods": pods,
-                    },
-                }
-            )
+            output = {
+                "tool": item.get("tool"),
+                "dependency": item.get("dependency"),
+                "scope_candidate": item.get("scope_candidate", {}),
+            }
+            if "kubernetes" in item:
+                output["kubernetes"] = cls._reduce_kubernetes(item)
+            if "logs" in item:
+                output["logs"] = cls._reduce_logs(item.get("logs", {}))
+            if "metrics" in item:
+                output["metrics"] = cls._reduce_metrics(item.get("metrics", {}))
+            if "error" in item:
+                output["error"] = item["error"]
+            reduced.append(output)
         return reduced

@@ -13,20 +13,26 @@ Application configuration is stored in MySQL and is intended to be managed throu
 The data model supports application-specific bindings for:
 
 - Kubernetes
-- Logs (first provider planned: Elasticsearch)
-- Traces (first provider planned: Elastic APM)
-- Metrics (first provider planned: Prometheus)
+- Logs
+- Traces
+- Metrics
 - Hosts
-- Alerting (Grafana first)
+- Alerting
 - Git
 - Argo CD
 - Terraform
 
-The current executable RCA provider is Kubernetes. The other tool types are represented by the generic connection/tool model and will be implemented incrementally.
+Executable providers currently implemented:
+
+- Kubernetes
+- Elasticsearch Logs
+- Prometheus Metrics
+
+Elastic APM, host collectors, Git, Argo CD, Terraform, and external Kubernetes connection factories are planned next.
 
 ### Dependencies
 
-Applications can define dependencies such as Redis, RabbitMQ, databases, and external/partner systems. Each dependency can have its own diagnostic tool binding and configuration, for example a Prometheus connection plus metric labels identifying a Redis instance.
+Applications can define dependencies such as Redis, RabbitMQ, databases, and external/partner systems. Each dependency can have its own diagnostic tool binding and configuration, for example a Prometheus connection plus metric queries identifying a Redis instance.
 
 ## Safety
 
@@ -38,10 +44,10 @@ Connection credentials are not returned by APIs and are stored encrypted in `con
 
 Each application chooses one strategy:
 
-- `collect_then_analyze`: collect evidence from all selected candidates, then call the LLM once.
-- `agentic`: investigate the highest-confidence candidate first and expand to additional candidates only when the first LLM pass reports insufficient evidence.
+- `collect_then_analyze`: collect evidence from all configured application tools and dependency tools, then call the LLM once.
+- `agentic`: process tools in priority order, analyze after each tool, and stop when the LLM says the collected evidence is sufficient. Dependencies are inspected only if application-level evidence remains insufficient.
 
-The agent stores full evidence in the database but sends a reduced evidence payload to the LLM. Logs are de-duplicated and bounded before LLM submission.
+The agent stores full evidence in the database but sends a reduced evidence payload to the LLM. Kubernetes logs are de-duplicated and bounded, Elasticsearch hits are capped, and Prometheus time-series samples are truncated before LLM submission.
 
 ## 5 Why RCA
 
@@ -98,7 +104,140 @@ Swagger UI: `http://127.0.0.1:8000/docs`
    - `labels.application`
 6. RCA runs asynchronously and stores status/evidence/result in MySQL.
 
-Example Kubernetes binding config:
+## Connection configuration
+
+Connections contain transport/authentication details. Tool bindings contain application-specific query/filter details.
+
+### Prometheus connection
+
+Create a connection:
+
+```json
+{
+  "name": "prod-prometheus",
+  "provider_type": "prometheus",
+  "config": {
+    "base_url": "http://prometheus.observability.svc.cluster.local:9090",
+    "timeout_seconds": 10,
+    "verify_ssl": true,
+    "default_step": "30s"
+  }
+}
+```
+
+Optional encrypted credentials may contain:
+
+```json
+{
+  "bearer_token": "..."
+}
+```
+
+or:
+
+```json
+{
+  "username": "...",
+  "password": "..."
+}
+```
+
+Prometheus application tool example:
+
+```json
+{
+  "tool_type": "metrics",
+  "provider_type": "prometheus",
+  "connection_id": 2,
+  "priority": 20,
+  "config": {
+    "lookback_minutes": 15,
+    "queries": [
+      {
+        "name": "service error rate",
+        "promql": "sum(rate(traces_span_metrics_calls_total{service_name=\"{service_name}\",status_code=\"STATUS_CODE_ERROR\"}[5m])) / sum(rate(traces_span_metrics_calls_total{service_name=\"{service_name}\"}[5m]))",
+        "mode": "range",
+        "step": "30s"
+      }
+    ]
+  }
+}
+```
+
+Supported placeholders include `{service_name}`, `{namespace}`, `{application_name}`, `{application_slug}`, `{dependency_name}`, and `{dependency_type}`.
+
+A dependency can use the same provider with dependency-specific queries, for example Redis metrics:
+
+```json
+{
+  "tool_type": "metrics",
+  "provider_type": "prometheus",
+  "connection_id": 2,
+  "config": {
+    "queries": [
+      {
+        "name": "redis availability",
+        "promql": "redis_up{instance=\"{dependency_name}\"}",
+        "mode": "range"
+      }
+    ]
+  }
+}
+```
+
+### Elasticsearch Logs connection
+
+Create a connection:
+
+```json
+{
+  "name": "prod-elasticsearch",
+  "provider_type": "elasticsearch",
+  "config": {
+    "base_url": "https://elasticsearch.example.internal:9200",
+    "timeout_seconds": 15,
+    "verify_ssl": true
+  }
+}
+```
+
+Encrypted credentials may contain `api_key`, `bearer_token`, or `username` + `password`.
+
+Elasticsearch Logs application tool example:
+
+```json
+{
+  "tool_type": "logs",
+  "provider_type": "elasticsearch",
+  "connection_id": 3,
+  "priority": 10,
+  "config": {
+    "index_pattern": "otel-logs-*",
+    "lookback_minutes": 15,
+    "size": 200,
+    "time_field": "@timestamp",
+    "service_field": "service.name.keyword",
+    "namespace_field": "kubernetes.namespace.name.keyword",
+    "filters": {
+      "environment.keyword": "prod"
+    }
+  }
+}
+```
+
+The provider uses only Elasticsearch `_search`; it does not expose index/document mutation APIs to RCA orchestration.
+
+## Testing connections
+
+After creating a Prometheus or Elasticsearch connection and optionally setting credentials:
+
+```text
+POST /api/v1/connections/{connection_id}/test
+```
+
+This validates the configured source without restarting RCA Agent.
+
+## Kubernetes binding example
 
 ```json
 {
@@ -110,6 +249,4 @@ Example Kubernetes binding config:
 }
 ```
 
-## Current scope of the refactor
-
-The application/context layer, CRUD APIs, encrypted credential storage, application-aware alerts/investigations, token-reduction path, read-only policy, and 5 Why schema are implemented in the application-context refactor. Elasticsearch Logs, Elastic APM, Prometheus, host collectors, Git, Argo CD, Terraform, and external Kubernetes connection factories are the next provider implementations.
+A Kubernetes binding is optional. Applications running only on Linux/Windows or using only external observability sources can be investigated without Kubernetes configuration.
