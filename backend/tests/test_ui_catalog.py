@@ -29,7 +29,9 @@ def test_provider_catalog_matches_runtime_keys():
     assert {"index_pattern", "lookback_minutes", "max_traces", "trace_id_field", "filters"} <= apm_tool_fields
     assert {"mode", "context", "verify_ssl"} <= k8s_connection_fields
     assert {"kubeconfig"} <= k8s_credential_fields
-    assert {"namespace", "tail_lines"} <= k8s_tool_fields
+    assert {"namespaces", "tail_lines"} <= k8s_tool_fields
+    namespaces_field = next(x for x in kubernetes["tool_fields"] if x["name"] == "namespaces")
+    assert namespaces_field["type"] == "tags"
     assert set(next(x for x in kubernetes["connection_fields"] if x["name"] == "mode")["options"]) == {"in_cluster", "kubeconfig"}
 
 
