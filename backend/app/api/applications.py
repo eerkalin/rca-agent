@@ -34,6 +34,8 @@ def _application(item) -> dict:
         "description": item.description,
         "enabled": item.enabled,
         "investigation_strategy": item.investigation_strategy,
+        "llm_connection_id": item.llm_connection_id,
+        "llm_config": item.llm_config or {},
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     }
@@ -88,9 +90,20 @@ def _dependency_tool(item) -> dict:
     }
 
 
+def _validate_llm_connection(db, connection_id: int | None) -> None:
+    if connection_id is None:
+        return
+    connection = ConnectionRepository.get(db, connection_id)
+    if connection is None:
+        raise HTTPException(status_code=404, detail="LLM connection not found")
+    if connection.provider_type not in {"gemini", "openai", "anthropic", "openai_compatible"}:
+        raise HTTPException(status_code=400, detail="Selected connection is not an LLM provider")
+
+
 @router.post("/applications", status_code=201)
 async def create_application(request: ApplicationCreate):
     with SessionLocal() as db:
+        _validate_llm_connection(db, request.llm_connection_id)
         try:
             item = ApplicationRepository.create(db, **request.model_dump())
         except IntegrityError as exc:
@@ -125,6 +138,8 @@ async def update_application(application_id: int, request: ApplicationUpdate):
         if item is None:
             raise HTTPException(status_code=404, detail="Application not found")
         values = request.model_dump(exclude_unset=True)
+        if "llm_connection_id" in values:
+            _validate_llm_connection(db, values["llm_connection_id"])
         try:
             item = ApplicationRepository.update(db, item, **values)
         except IntegrityError as exc:

@@ -5,6 +5,7 @@ from app.applications.runtime import RuntimeConnectionResolver
 from app.db.session import SessionLocal
 from app.integrations.elasticsearch.provider import ElasticsearchLogsProvider
 from app.integrations.kubernetes.factory import KubernetesProviderFactory
+from app.integrations.llm.factory import LLMProviderFactory
 from app.integrations.prometheus.provider import PrometheusProvider
 from app.rca.tool_policy import ToolPolicy
 
@@ -24,20 +25,16 @@ async def test_connection(connection_id: int):
             provider_type = connection.provider_type
 
             if provider_type == "prometheus":
-                result = PrometheusProvider(
-                    runtime["config"], runtime["credentials"]
-                ).test_connection()
+                result = PrometheusProvider(runtime["config"], runtime["credentials"]).test_connection()
             elif provider_type in {"elasticsearch", "elastic"}:
-                result = ElasticsearchLogsProvider(
-                    runtime["config"], runtime["credentials"]
-                ).test_connection()
+                result = ElasticsearchLogsProvider(runtime["config"], runtime["credentials"]).test_connection()
             elif provider_type == "kubernetes":
                 ToolPolicy.assert_allowed("kubernetes", "list_namespaces")
                 result = KubernetesProviderFactory.create(runtime).test_connection()
+            elif provider_type in LLMProviderFactory.SUPPORTED:
+                result = LLMProviderFactory.create(runtime).test_connection()
             else:
-                raise ValueError(
-                    f"Connection test is not implemented for provider {provider_type}"
-                )
+                raise ValueError(f"Connection test is not implemented for provider {provider_type}")
 
             return {
                 "connection_id": connection_id,

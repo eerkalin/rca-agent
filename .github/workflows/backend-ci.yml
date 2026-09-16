@@ -54,7 +54,7 @@ jobs:
 
       - name: Run unit tests
         working-directory: backend
-        run: python -m unittest discover -s tests -p 'test_*.py'
+        run: python -m pytest -q
 
       - name: Apply database migrations
         working-directory: backend

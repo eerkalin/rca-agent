@@ -9,9 +9,22 @@ from app.rca.scope_models import ScopeResolution
 
 
 class GeminiProvider:
-    def __init__(self):
-        self.client = genai.Client(api_key=settings.gemini_api_key)
-        self.model = settings.gemini_model
+    def __init__(
+        self,
+        config: dict | None = None,
+        credentials: dict | None = None,
+        application_config: dict | None = None,
+    ):
+        config = config or {}
+        credentials = credentials or {}
+        application_config = application_config or {}
+        api_key = credentials.get("api_key") or settings.gemini_api_key
+        if not api_key:
+            raise ValueError("Gemini requires encrypted api_key credential")
+        self.client = genai.Client(api_key=api_key)
+        self.model = application_config.get("model") or config.get("model") or settings.gemini_model
+        self.temperature = float(application_config.get("temperature", config.get("temperature", 0.1)))
+        self.max_output_tokens = application_config.get("max_output_tokens") or config.get("max_output_tokens")
 
     def test_connection(self) -> dict:
         response = self.client.models.generate_content(
@@ -20,9 +33,20 @@ class GeminiProvider:
         )
         return {
             "connected": True,
+            "provider": "gemini",
             "model": self.model,
             "response": response.text,
         }
+
+    def _config(self, schema):
+        kwargs = {
+            "temperature": self.temperature,
+            "response_mime_type": "application/json",
+            "response_schema": schema,
+        }
+        if self.max_output_tokens:
+            kwargs["max_output_tokens"] = int(self.max_output_tokens)
+        return types.GenerateContentConfig(**kwargs)
 
     def analyze_rca(
         self,
@@ -66,11 +90,7 @@ Return a concise technical RCA suitable for incident engineers.
         response = self.client.models.generate_content(
             model=self.model,
             contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                response_mime_type="application/json",
-                response_schema=RCAResult,
-            ),
+            config=self._config(RCAResult),
         )
         return RCAResult.model_validate_json(response.text)
 
@@ -105,10 +125,6 @@ TECHNICAL INVENTORY:
         response = self.client.models.generate_content(
             model=self.model,
             contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                response_mime_type="application/json",
-                response_schema=ScopeResolution,
-            ),
+            config=self._config(ScopeResolution),
         )
         return ScopeResolution.model_validate_json(response.text)
