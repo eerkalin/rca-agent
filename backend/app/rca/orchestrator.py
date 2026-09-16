@@ -5,6 +5,7 @@ from app.applications.runtime import RuntimeConnectionResolver
 from app.db.session import SessionLocal
 from app.integrations.elasticsearch.provider import ElasticsearchLogsProvider
 from app.integrations.gemini.provider import GeminiProvider
+from app.integrations.kubernetes.factory import KubernetesProviderFactory
 from app.integrations.prometheus.provider import PrometheusProvider
 from app.rca.evidence_collector import EvidenceCollector
 from app.rca.evidence_reducer import EvidenceReducer
@@ -17,6 +18,7 @@ class RCAOrchestrator:
         self.scope_resolver = ScopeResolver()
         self.evidence_collector = EvidenceCollector()
         self.llm = GeminiProvider()
+        self._kubernetes_providers: dict[int, object] = {}
 
     @staticmethod
     def _tool_descriptor(tool: dict) -> dict:
@@ -24,6 +26,7 @@ class RCAOrchestrator:
             "id": tool.get("id"),
             "tool_type": tool.get("tool_type"),
             "provider_type": tool.get("provider_type"),
+            "connection_id": tool.get("connection_id"),
         }
 
     @staticmethod
@@ -58,7 +61,25 @@ class RCAOrchestrator:
             application_context=compact_context,
         )
 
-    def _resolve_kubernetes_scope(self, query: str, context: dict):
+    def _kubernetes_provider(self, db: Session, tool: dict):
+        connection_id = tool.get("connection_id")
+        if connection_id is None:
+            raise ValueError(
+                "Kubernetes application tool requires connection_id. Configure a Kubernetes Connection in the UI."
+            )
+        if connection_id in self._kubernetes_providers:
+            return self._kubernetes_providers[connection_id]
+
+        runtime = RuntimeConnectionResolver.resolve(db, connection_id)
+        if runtime.get("provider_type") != "kubernetes":
+            raise ValueError(
+                f"Connection {connection_id} is not a Kubernetes connection"
+            )
+        provider = KubernetesProviderFactory.create(runtime)
+        self._kubernetes_providers[connection_id] = provider
+        return provider
+
+    def _resolve_kubernetes_scope(self, db: Session, query: str, context: dict):
         kubernetes_tool = ApplicationContextService.find_tool(
             context,
             tool_type="kubernetes",
@@ -67,11 +88,22 @@ class RCAOrchestrator:
         if kubernetes_tool is None:
             return None, []
 
+        provider = self._kubernetes_provider(db, kubernetes_tool)
         namespace = kubernetes_tool.get("config", {}).get("namespace")
-        scope = self.scope_resolver.resolve(text=query, namespace=namespace)
+        scope = self.scope_resolver.resolve(
+            text=query,
+            kubernetes=provider,
+            namespace=namespace,
+        )
         return scope, list(scope.candidates)
 
-    def _collect_kubernetes(self, tool: dict, candidates: list, collect_all: bool) -> list[dict]:
+    def _collect_kubernetes(
+        self,
+        db: Session,
+        tool: dict,
+        candidates: list,
+        collect_all: bool,
+    ) -> list[dict]:
         if not candidates:
             return [
                 {
@@ -80,10 +112,12 @@ class RCAOrchestrator:
                 }
             ]
 
+        provider = self._kubernetes_provider(db, tool)
         selected = candidates if collect_all else candidates[:1]
         evidence = []
         for candidate in selected:
             service_evidence = self.evidence_collector.collect_for_service(
+                kubernetes=provider,
                 namespace=candidate.namespace,
                 service_name=candidate.service_name,
                 tail_lines=int(tool.get("config", {}).get("tail_lines", 50)),
@@ -189,7 +223,12 @@ class RCAOrchestrator:
         collect_all: bool,
     ) -> list[dict]:
         if tool.get("tool_type") == "kubernetes" and tool.get("provider_type") == "kubernetes":
-            return self._collect_kubernetes(tool, candidates, collect_all=collect_all)
+            return self._collect_kubernetes(
+                db=db,
+                tool=tool,
+                candidates=candidates,
+                collect_all=collect_all,
+            )
 
         candidate = candidates[0] if candidates else None
         return self._collect_non_kubernetes_tool(
@@ -220,6 +259,7 @@ class RCAOrchestrator:
         )
 
     def run(self, investigation_id: int) -> None:
+        self._kubernetes_providers = {}
         with SessionLocal() as db:
             investigation = InvestigationRepository.get_by_id(db, investigation_id)
             if investigation is None:
@@ -236,6 +276,7 @@ class RCAOrchestrator:
                     raise ValueError("Application has no enabled investigation tools")
 
                 scope, candidates = self._resolve_kubernetes_scope(
+                    db,
                     investigation.query,
                     context,
                 )
@@ -271,9 +312,6 @@ class RCAOrchestrator:
 
                     rca = self._analyze(investigation.query, evidence, context)
                 else:
-                    # Agentic strategy: inspect one configured tool at a time,
-                    # analyze the evidence, and stop as soon as the LLM states
-                    # that enough evidence exists. Tool priority controls order.
                     for tool in context["tools"]:
                         evidence.extend(
                             self._collect_application_tool(
