@@ -53,22 +53,45 @@ const fieldHelp = {
   mode: 'How RCA Agent authenticates to Kubernetes. In-cluster uses its Kubernetes ServiceAccount; Kubeconfig uses encrypted kubeconfig content.',
   context: 'Optional kubeconfig context name to select when a kubeconfig contains multiple contexts.',
   kubeconfig: 'Full kubeconfig YAML. The value is encrypted and write-only.',
-  namespace: 'Kubernetes namespace that belongs to this Application. Multi-namespace support is added in the next compatibility step.',
+  namespace: 'Legacy single Kubernetes namespace setting retained for upgrade compatibility.',
+  namespaces: 'Kubernetes namespaces that belong to this Application. Enter one or more names separated by commas, for example otel-demo, payments, shared-services.',
   tail_lines: 'Maximum number of recent log lines requested per container during evidence collection.',
   model: 'Model identifier sent to the selected LLM provider, for example gemini-3.6-flash.',
   temperature: 'LLM sampling temperature. Lower values make RCA output more deterministic.',
   max_output_tokens: 'Optional maximum number of tokens the LLM may return for one response.',
 };
 
+const baseFieldValueFriendly = fieldValue;
+fieldValue = function(input, field) {
+  if (field.type === 'tags') {
+    return input.value.split(',').map(value => value.trim()).filter((value, index, all) => value && all.indexOf(value) === index);
+  }
+  return baseFieldValueFriendly(input, field);
+};
+
+const baseCollectFieldsFriendly = collectFields;
+collectFields = function(root, fields=[]) {
+  const out = baseCollectFieldsFriendly(root, fields);
+  if (Array.isArray(out.namespaces)) {
+    // Expand-first compatibility: new releases use `namespaces`, while the first
+    // namespace is mirrored to the legacy key so the previous release can still
+    // read the configuration after a Helm rollback.
+    out.namespace = out.namespaces[0] || null;
+  }
+  return out;
+};
+
 fieldsHtml = function(fields=[], values={}, prefix='f') {
   return fields.map(f => {
-    const v = values?.[f.name] ?? f.default ?? '';
+    let v = values?.[f.name] ?? f.default ?? '';
+    if (f.name === 'namespaces' && (!v || !v.length) && values?.namespace) v = [values.namespace];
     const help = f.help || fieldHelp[f.name] || '';
     const hint = help ? `<span class="hint field-help">${esc(help)}</span>` : '';
     const required = f.required ? '<span class="required-mark" title="Required"> *</span>' : '';
     if (f.type === 'boolean') return `<label class="switch field-with-help"><span><input data-field="${esc(f.name)}" id="${prefix}-${esc(f.name)}" type="checkbox" ${v?'checked':''}> ${esc(f.label)}${required}</span>${hint}</label>`;
     if (f.type === 'select') return `<label class="field-with-help">${esc(f.label)}${required}<select data-field="${esc(f.name)}" id="${prefix}-${esc(f.name)}">${(f.options||[]).map(o=>{const value=typeof o==='object'?o.value:o;const label=typeof o==='object'?o.label:friendlyValue(o);return `<option value="${esc(value)}" ${String(v)===String(value)?'selected':''}>${esc(label)}</option>`}).join('')}</select>${hint}</label>`;
     if (f.type === 'json') return `<label class="full field-with-help">${esc(f.label)}${required}<textarea data-field="${esc(f.name)}" id="${prefix}-${esc(f.name)}">${esc(JSON.stringify(v||{},null,2))}</textarea>${hint}</label>`;
+    if (f.type === 'tags') return `<label class="full field-with-help">${esc(f.label)}${required}<input data-field="${esc(f.name)}" id="${prefix}-${esc(f.name)}" type="text" value="${esc(Array.isArray(v)?v.join(', '):v)}" placeholder="${esc(f.placeholder||'namespace-a, namespace-b')}">${hint}</label>`;
     if (f.type === 'textarea-password') return `<label class="full field-with-help">${esc(f.label)}${required}<textarea data-field="${esc(f.name)}" id="${prefix}-${esc(f.name)}" class="secret-textarea" autocomplete="off" spellcheck="false" placeholder="${esc(f.placeholder||'')}"></textarea><span class="hint field-help">${esc(help || 'Sensitive value is write-only: saved encrypted and never loaded back into this form.')}</span></label>`;
     return `<label class="field-with-help">${esc(f.label)}${required}<input data-field="${esc(f.name)}" id="${prefix}-${esc(f.name)}" type="${f.type==='password'?'password':f.type==='number'?'number':'text'}" value="${esc(v)}" placeholder="${esc(f.placeholder||'')}">${hint}</label>`;
   }).join('');
