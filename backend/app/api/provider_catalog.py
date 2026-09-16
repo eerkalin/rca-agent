@@ -12,8 +12,9 @@ PROVIDERS = [
         "implemented": True,
         "connection_fields": [
             {"name": "base_url", "label": "Base URL", "type": "text", "required": True, "placeholder": "http://prometheus:9090"},
-            {"name": "verify_tls", "label": "Verify TLS", "type": "boolean", "default": True},
+            {"name": "verify_ssl", "label": "Verify TLS certificate", "type": "boolean", "default": True},
             {"name": "timeout_seconds", "label": "Timeout (seconds)", "type": "number", "default": 10},
+            {"name": "default_step", "label": "Default range step", "type": "text", "default": "30s"},
         ],
         "credential_fields": [
             {"name": "bearer_token", "label": "Bearer token", "type": "password", "required": False},
@@ -21,11 +22,10 @@ PROVIDERS = [
             {"name": "password", "label": "Password", "type": "password", "required": False},
         ],
         "tool_fields": [
-            {"name": "queries", "label": "PromQL query templates (JSON object)", "type": "json", "default": {}},
-            {"name": "range_queries", "label": "PromQL range query templates (JSON object)", "type": "json", "default": {}},
-            {"name": "lookback_minutes", "label": "Lookback (minutes)", "type": "number", "default": 15},
-            {"name": "step_seconds", "label": "Range step (seconds)", "type": "number", "default": 30},
+            {"name": "queries", "label": "PromQL queries (JSON array)", "type": "json", "default": []},
+            {"name": "lookback_minutes", "label": "Default lookback (minutes)", "type": "number", "default": 15},
         ],
+        "notes": "Each query item supports name, promql/query, mode=instant|range, window_minutes and step.",
     },
     {
         "provider_type": "elasticsearch",
@@ -34,8 +34,8 @@ PROVIDERS = [
         "implemented": True,
         "connection_fields": [
             {"name": "base_url", "label": "Base URL", "type": "text", "required": True, "placeholder": "https://elasticsearch:9200"},
-            {"name": "verify_tls", "label": "Verify TLS", "type": "boolean", "default": True},
-            {"name": "timeout_seconds", "label": "Timeout (seconds)", "type": "number", "default": 10},
+            {"name": "verify_ssl", "label": "Verify TLS certificate", "type": "boolean", "default": True},
+            {"name": "timeout_seconds", "label": "Timeout (seconds)", "type": "number", "default": 15},
         ],
         "credential_fields": [
             {"name": "api_key", "label": "API key", "type": "password", "required": False},
@@ -44,14 +44,15 @@ PROVIDERS = [
             {"name": "password", "label": "Password", "type": "password", "required": False},
         ],
         "tool_fields": [
-            {"name": "index", "label": "Index pattern", "type": "text", "default": "logs-*"},
-            {"name": "timestamp_field", "label": "Timestamp field", "type": "text", "default": "@timestamp"},
-            {"name": "service_field", "label": "Service field", "type": "text", "default": "service.name"},
-            {"name": "namespace_field", "label": "Namespace field", "type": "text", "default": "kubernetes.namespace"},
-            {"name": "message_field", "label": "Message field", "type": "text", "default": "message"},
+            {"name": "index_pattern", "label": "Index pattern", "type": "text", "default": "logs-*"},
+            {"name": "time_field", "label": "Timestamp field", "type": "text", "default": "@timestamp"},
+            {"name": "service_field", "label": "Service filter field", "type": "text", "default": "service.name.keyword"},
+            {"name": "namespace_field", "label": "Namespace filter field", "type": "text", "default": "kubernetes.namespace.name.keyword"},
             {"name": "lookback_minutes", "label": "Lookback (minutes)", "type": "number", "default": 15},
-            {"name": "max_hits", "label": "Max log hits", "type": "number", "default": 100},
+            {"name": "size", "label": "Max log hits", "type": "number", "default": 200},
             {"name": "filters", "label": "Additional term filters (JSON object)", "type": "json", "default": {}},
+            {"name": "message_fields", "label": "Search message fields (JSON array, optional)", "type": "json", "default": []},
+            {"name": "source_fields", "label": "Returned source fields (JSON array, optional)", "type": "json", "default": []},
         ],
     },
     {
@@ -68,7 +69,7 @@ PROVIDERS = [
             {"name": "namespace", "label": "Namespace", "type": "text", "required": True},
             {"name": "tail_lines", "label": "Log tail lines", "type": "number", "default": 50},
         ],
-        "notes": "Current Kubernetes provider still uses RCA Agent runtime kubeconfig/in-cluster credentials; external per-connection kubeconfig execution will be added separately.",
+        "notes": "Current Kubernetes execution uses RCA Agent runtime kubeconfig/in-cluster credentials. The UI stores the intended connection record now; external per-connection kubeconfig execution is a follow-up.",
     },
     {"provider_type": "elastic_apm", "tool_types": ["traces"], "label": "Elastic APM", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
     {"provider_type": "grafana", "tool_types": ["alerting"], "label": "Grafana", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
