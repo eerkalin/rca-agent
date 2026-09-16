@@ -95,12 +95,14 @@ class RCAOrchestrator:
             log_event(logger, logging.INFO, "rca.scope.skip", "No Kubernetes tool configured; skipping Kubernetes scope resolution")
             return None, []
         provider = self._kubernetes_provider(db, kubernetes_tool)
-        namespace = kubernetes_tool.get("config", {}).get("namespace")
+        config = kubernetes_tool.get("config", {})
+        namespaces = config.get("namespaces") or []
+        namespace = config.get("namespace") if not namespaces else None
         started = time.perf_counter()
-        log_event(logger, logging.INFO, "rca.scope.start", "Resolving Kubernetes investigation scope", namespace=namespace)
-        scope = self.scope_resolver.resolve(text=query, kubernetes=provider, llm=llm, namespace=namespace)
+        log_event(logger, logging.INFO, "rca.scope.start", "Resolving Kubernetes investigation scope", namespaces=namespaces or ([namespace] if namespace else []))
+        scope = self.scope_resolver.resolve(text=query, kubernetes=provider, llm=llm, namespace=namespace, namespaces=namespaces)
         candidates = list(scope.candidates)
-        log_event(logger, logging.INFO, "rca.scope.complete", "Kubernetes scope resolved", namespace=namespace, elapsed_ms=elapsed_ms(started), candidates=[{"service_name": item.service_name, "namespace": item.namespace, "confidence": item.confidence} for item in candidates], unresolved=scope.unresolved)
+        log_event(logger, logging.INFO, "rca.scope.complete", "Kubernetes scope resolved", namespaces=namespaces or ([namespace] if namespace else []), elapsed_ms=elapsed_ms(started), candidates=[{"service_name": item.service_name, "namespace": item.namespace, "confidence": item.confidence} for item in candidates], unresolved=scope.unresolved)
         return scope, candidates
 
     def _collect_kubernetes(self, db: Session, tool: dict, candidates: list, collect_all: bool) -> list[dict]:
