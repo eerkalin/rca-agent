@@ -17,6 +17,7 @@ from app.api.kubernetes import router as kubernetes_router
 from app.api.provider_catalog import router as provider_catalog_router
 from app.api.scope import router as scope_router
 from app.config import settings
+from app.db.schema_compat import assert_schema_current, schema_status
 from app.db.session import engine
 
 
@@ -39,6 +40,11 @@ ui_dir = Path(__file__).resolve().parent / "ui"
 app.mount("/ui", StaticFiles(directory=ui_dir, html=True), name="ui")
 
 
+@app.on_event("startup")
+async def verify_database_schema() -> None:
+    assert_schema_current(engine)
+
+
 @app.get("/", include_in_schema=False)
 async def root():
     return RedirectResponse(url="/ui/")
@@ -53,4 +59,9 @@ async def health():
 async def database_health():
     with engine.connect() as connection:
         connection.execute(text("SELECT 1")).scalar_one()
-    return {"status": "ok", "database": "mysql"}
+    migration_status = schema_status(engine)
+    return {
+        "status": "ok" if migration_status["up_to_date"] else "error",
+        "database": "mysql",
+        "schema": migration_status,
+    }
