@@ -11,6 +11,7 @@ on:
       - ".env.docker.example"
       - "INSTALLATION.md"
       - ".github/workflows/backend-ci.yml"
+      - ".github/workflows/container-publish.yml"
   push:
     branches:
       - main
@@ -22,6 +23,7 @@ on:
       - "docker-compose.yml"
       - ".env.docker.example"
       - "INSTALLATION.md"
+      - ".github/workflows/container-publish.yml"
 
 jobs:
   backend:
