@@ -26,6 +26,10 @@ PUBLIC_API_PATHS = {
     "/api/v1/alerts/grafana",
 }
 
+ADMIN_ONLY_PREFIXES = (
+    "/api/v1/auth/users",
+)
+
 INVESTIGATOR_POST_PREFIXES = (
     "/api/v1/investigations",
     "/api/v1/ai",
@@ -51,13 +55,16 @@ def _is_investigator_action(request: Request) -> bool:
 
 
 def _authorized(role: str, request: Request) -> bool:
+    path = request.url.path
     if role == ROLE_ADMIN:
         return True
+    if path.startswith(ADMIN_ONLY_PREFIXES):
+        return False
     if request.method in {"GET", "HEAD", "OPTIONS"}:
         return role in {ROLE_INVESTIGATOR, ROLE_READONLY}
     if role == ROLE_INVESTIGATOR and _is_investigator_action(request):
         return True
-    if request.url.path == "/api/v1/auth/logout" and request.method == "POST":
+    if path == "/api/v1/auth/logout" and request.method == "POST":
         return role in {ROLE_INVESTIGATOR, ROLE_READONLY}
     return False
 
