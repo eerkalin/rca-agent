@@ -61,15 +61,18 @@ PROVIDERS = [
         "label": "Kubernetes",
         "implemented": True,
         "connection_fields": [
-            {"name": "mode", "label": "Connection mode", "type": "select", "options": ["local_kubeconfig", "in_cluster"], "default": "local_kubeconfig"},
+            {"name": "mode", "label": "Connection mode", "type": "select", "options": ["in_cluster", "kubeconfig"], "default": "kubeconfig"},
             {"name": "context", "label": "Kube context", "type": "text", "required": False},
+            {"name": "verify_ssl", "label": "Verify TLS certificate", "type": "boolean", "default": True},
         ],
-        "credential_fields": [],
+        "credential_fields": [
+            {"name": "kubeconfig", "label": "Kubeconfig YAML", "type": "textarea-password", "required": False, "sensitive": True},
+        ],
         "tool_fields": [
             {"name": "namespace", "label": "Namespace", "type": "text", "required": True},
             {"name": "tail_lines", "label": "Log tail lines", "type": "number", "default": 50},
         ],
-        "notes": "Current Kubernetes execution uses RCA Agent runtime kubeconfig/in-cluster credentials. The UI stores the intended connection record now; external per-connection kubeconfig execution is a follow-up.",
+        "notes": "Use in_cluster when RCA Agent runs inside the target cluster. Use kubeconfig for external clusters; kubeconfig is encrypted in MySQL and loaded only in backend memory. Application tool must reference this Connection.",
     },
     {"provider_type": "elastic_apm", "tool_types": ["traces"], "label": "Elastic APM", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
     {"provider_type": "grafana", "tool_types": ["alerting"], "label": "Grafana", "implemented": False, "connection_fields": [], "credential_fields": [], "tool_fields": []},
