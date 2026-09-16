@@ -7,11 +7,22 @@
   <link rel="stylesheet" href="/ui/styles.css">
 </head>
 <body>
+  <div id="auth-gate" class="auth-gate hidden">
+    <form id="login-form" class="auth-card">
+      <h1>RCA Agent</h1>
+      <p>Sign in to continue.</p>
+      <label>Username<input id="login-username" autocomplete="username" required></label>
+      <label>Password<input id="login-password" type="password" autocomplete="current-password" required></label>
+      <div id="login-error" class="error hidden"></div>
+      <button class="primary" type="submit">Sign in</button>
+    </form>
+  </div>
   <header class="topbar">
     <div><strong>RCA Agent</strong><span class="muted"> application-centric RCA</span></div>
-    <nav><button data-view="applications">Applications</button><button data-view="connections">Connections</button></nav>
+    <nav><button data-view="applications">Applications</button><button data-view="connections">Connections</button><button data-view="users" id="users-nav" class="hidden">Users</button></nav>
+    <div id="session-controls" class="session-controls hidden"><span id="session-user"></span><button id="logout-button">Logout</button></div>
   </header>
-  <main>
+  <main id="app-shell">
     <section id="applications-view" class="view">
       <div class="section-head"><div><h1>Applications</h1><p>Investigation scope, tools and dependencies are stored in MySQL.</p></div><button id="new-application">New application</button></div>
       <div id="applications-list" class="cards"></div>
@@ -22,6 +33,11 @@
       <div id="connections-list" class="cards"></div>
       <div id="connection-editor" class="panel hidden"></div>
     </section>
+    <section id="users-view" class="view hidden">
+      <div class="section-head"><div><h1>Users</h1><p>Administrators manage interactive access and RCA Agent roles.</p></div><button id="new-user">New user</button></div>
+      <div id="users-list" class="cards"></div>
+      <div id="user-editor" class="panel hidden"></div>
+    </section>
   </main>
   <div id="toast" class="toast hidden"></div>
   <script src="/ui/app.js"></script>
@@ -29,5 +45,6 @@
   <script src="/ui/application-detail.js"></script>
   <script src="/ui/connection-detail.js"></script>
   <script src="/ui/friendly-ui.js"></script>
+  <script src="/ui/auth-ui.js"></script>
 </body>
 </html>

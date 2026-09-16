@@ -7,3 +7,4 @@ from app.db.models.application import (
     DependencyTool,
 )
 from app.db.models.investigation import Investigation
+from app.db.models.user import User

@@ -14,6 +14,14 @@ fullnameOverride: ""
 runtime:
   logLevel: INFO
 
+auth:
+  # Disabled by default so existing installations upgrade without being locked
+  # out. Enable after the bootstrap Secret is available.
+  enabled: false
+  bootstrapAdminUsername: admin
+  sessionTtlSeconds: 28800
+  cookieSecure: false
+
 serviceAccount:
   create: true
   name: ""
@@ -60,12 +68,15 @@ probes:
 
 # By default the chart creates one bootstrap Secret and generates all internal
 # credentials automatically. Set existingSecret only when you intentionally
-# want to manage DATABASE_URL, RCA_MASTER_KEY and MySQL passwords yourself.
+# want to manage DATABASE_URL, RCA_MASTER_KEY, authentication secrets and MySQL
+# passwords yourself.
 secrets:
   existingSecret: ""
   keys:
     databaseUrl: database-url
     masterKey: rca-master-key
+    authKey: rca-auth-key
+    bootstrapAdminPassword: bootstrap-admin-password
     mysqlRootPassword: mysql-root-password
     mysqlPassword: mysql-password
     legacyGeminiApiKey: gemini-api-key
