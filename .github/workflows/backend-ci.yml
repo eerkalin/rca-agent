@@ -7,6 +7,9 @@ on:
       - "helm/**"
       - "Dockerfile"
       - ".dockerignore"
+      - "docker-compose.yml"
+      - ".env.docker.example"
+      - "INSTALLATION.md"
       - ".github/workflows/backend-ci.yml"
   push:
     branches:
@@ -16,6 +19,9 @@ on:
       - "helm/**"
       - "Dockerfile"
       - ".dockerignore"
+      - "docker-compose.yml"
+      - ".env.docker.example"
+      - "INSTALLATION.md"
 
 jobs:
   backend:
@@ -72,6 +78,13 @@ jobs:
 
       - name: Build container image
         run: docker build -t rca-agent:ci .
+
+      - name: Validate Docker Compose
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_PASSWORD: ci-database-password
+          RCA_MASTER_KEY: ci-placeholder
+        run: docker compose config --quiet
 
       - uses: azure/setup-helm@v4
         with:
