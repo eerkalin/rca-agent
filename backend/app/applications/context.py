@@ -10,6 +10,20 @@ from app.applications.repository import (
 
 class ApplicationContextService:
     @staticmethod
+    def _tool_config(tool) -> dict:
+        config = dict(tool.config or {})
+        if tool.tool_type == "kubernetes" and tool.provider_type == "kubernetes":
+            namespaces = config.get("namespaces")
+            if namespaces:
+                # The orchestrator historically reads `namespace`. During the
+                # compatibility window expose the new list through that key in
+                # runtime context while retaining both keys in persisted JSON.
+                config["namespace"] = list(namespaces)
+            elif config.get("namespace"):
+                config["namespaces"] = [config["namespace"]]
+        return config
+
+    @staticmethod
     def load(db: Session, application_id: int) -> dict:
         application = ApplicationRepository.get(db, application_id)
         if application is None:
@@ -67,7 +81,7 @@ class ApplicationContextService:
                     "tool_type": tool.tool_type,
                     "provider_type": tool.provider_type,
                     "connection_id": tool.connection_id,
-                    "config": tool.config,
+                    "config": ApplicationContextService._tool_config(tool),
                     "priority": tool.priority,
                 }
                 for tool in tools
