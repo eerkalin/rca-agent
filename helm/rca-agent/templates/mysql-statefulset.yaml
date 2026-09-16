@@ -47,20 +47,20 @@ spec:
                 - /bin/sh
                 - -ec
                 - mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD"
-            initialDelaySeconds: 10
-            periodSeconds: 5
-            timeoutSeconds: 3
-            failureThreshold: 12
+            initialDelaySeconds: {{ .Values.mysql.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.mysql.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.mysql.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.mysql.probes.readiness.failureThreshold }}
           livenessProbe:
             exec:
               command:
                 - /bin/sh
                 - -ec
                 - mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD"
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            timeoutSeconds: 3
-            failureThreshold: 6
+            initialDelaySeconds: {{ .Values.mysql.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.mysql.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.mysql.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.mysql.probes.liveness.failureThreshold }}
           resources:
             {{- toYaml .Values.mysql.resources | nindent 12 }}
           volumeMounts:
@@ -70,7 +70,8 @@ spec:
     - metadata:
         name: data
       spec:
-        accessModes: ["ReadWriteOnce"]
+        accessModes:
+          {{- toYaml .Values.mysql.persistence.accessModes | nindent 10 }}
         {{- if .Values.mysql.persistence.storageClass }}
         storageClassName: {{ .Values.mysql.persistence.storageClass | quote }}
         {{- end }}
