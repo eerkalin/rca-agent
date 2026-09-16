@@ -36,7 +36,22 @@ The chart provides:
 - configurable RCA Agent and MySQL readiness/liveness probes
 - configurable MySQL PVC size, storage class and access modes
 - configurable application log level
-- external Secret references for `DATABASE_URL` and `RCA_MASTER_KEY`
+- automatic bootstrap credential generation
+
+### Automatic bootstrap credentials
+
+The default Helm installation is zero-touch for internal credentials. You do not need to invent a MySQL username/password, build a database URL, or generate the RCA encryption key.
+
+When `secrets.existingSecret` is empty (the default), Helm creates `<release>-bootstrap` and generates:
+
+- MySQL root password
+- RCA Agent MySQL user password
+- `DATABASE_URL` using the generated password and the chart's MySQL Service name
+- a cryptographically random Fernet-compatible `RCA_MASTER_KEY`
+
+On `helm upgrade`, the chart uses `lookup` to reuse the existing Secret values instead of rotating them. This keeps the MySQL credentials and encryption key stable across upgrades.
+
+If you intentionally want externally managed credentials, set `secrets.existingSecret` to the name of a Secret containing the configured keys.
 
 The default `values.yaml` is intentionally limited to deployment/runtime settings. Useful defaults for the first acceptance environment are:
 
@@ -47,7 +62,7 @@ terminationGracePeriodSeconds: 30
 
 image:
   repository: ghcr.io/eerkalin/rca-agent
-  tag: 0.8.0
+  tag: main
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -85,18 +100,19 @@ mysql:
 Example install with a public GHCR package:
 
 ```bash
-kubectl create namespace rca-agent
-
-kubectl -n rca-agent create secret generic rca-agent-secrets \
-  --from-literal=database-url='mysql+pymysql://rca_agent:CHANGE_ME@rca-agent-mysql:3306/rca_agent?charset=utf8mb4' \
-  --from-literal=rca-master-key='FERNET_KEY_HERE' \
-  --from-literal=mysql-root-password='CHANGE_ROOT_PASSWORD' \
-  --from-literal=mysql-password='CHANGE_APP_PASSWORD'
-
 helm upgrade --install rca-agent ./helm/rca-agent \
   --namespace rca-agent \
+  --create-namespace \
   --set image.repository=ghcr.io/eerkalin/rca-agent \
-  --set image.tag=0.8.0
+  --set image.tag=main
+```
+
+That single command creates the namespace, bootstrap Secret, MySQL, PVC, migration initContainer, RCA Agent Deployment, ServiceAccount/RBAC, and RCA Agent Service.
+
+To confirm that the generated Secret exists without printing its values:
+
+```bash
+kubectl get secret -n rca-agent rca-agent-bootstrap
 ```
 
 For the `otel-demo` acceptance test, create the Kubernetes Connection from the UI with `mode=in_cluster` and bind the Application Tool to namespace `otel-demo`.
@@ -156,7 +172,7 @@ docker build -t rca-agent:local .
 Or pull a published public image:
 
 ```bash
-docker pull ghcr.io/eerkalin/rca-agent:0.8.0
+docker pull ghcr.io/eerkalin/rca-agent:main
 ```
 
 Apply migrations against the external MySQL instance:
@@ -165,7 +181,7 @@ Apply migrations against the external MySQL instance:
 docker run --rm \
   -e DATABASE_URL='mysql+pymysql://USER:PASSWORD@MYSQL_HOST:3306/rca_agent?charset=utf8mb4' \
   -e RCA_MASTER_KEY='FERNET_KEY_HERE' \
-  ghcr.io/eerkalin/rca-agent:0.8.0 \
+  ghcr.io/eerkalin/rca-agent:main \
   alembic upgrade head
 ```
 
@@ -179,7 +195,7 @@ docker run -d \
   -e DATABASE_URL='mysql+pymysql://USER:PASSWORD@MYSQL_HOST:3306/rca_agent?charset=utf8mb4' \
   -e RCA_MASTER_KEY='FERNET_KEY_HERE' \
   -e LOG_LEVEL='INFO' \
-  ghcr.io/eerkalin/rca-agent:0.8.0
+  ghcr.io/eerkalin/rca-agent:main
 ```
 
 The standalone image intentionally does not bundle MySQL. Persistence, backup and HA of the external database remain the operator's responsibility.
@@ -195,4 +211,4 @@ Do not put investigated-application settings in Helm values, Compose environment
 - per-Application LLM Connection/model
 - provider and LLM credentials (encrypted before storage)
 
-Only RCA Agent runtime/deployment settings and bootstrap secrets such as the MySQL DSN and `RCA_MASTER_KEY` belong to deployment configuration.
+Only RCA Agent runtime/deployment settings and bootstrap secrets belong to deployment configuration. With the default Helm installation, those bootstrap secrets are generated automatically.
