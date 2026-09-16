@@ -8,6 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 class Settings(BaseSettings):
     database_url: str
+    log_level: str = "INFO"
 
     # Optional legacy fallback for Applications created before per-Application
     # LLM connections existed. New Applications should select an encrypted DB-
