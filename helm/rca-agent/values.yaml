@@ -1,4 +1,6 @@
 replicaCount: 1
+revisionHistoryLimit: 3
+terminationGracePeriodSeconds: 30
 
 image:
   repository: ghcr.io/eerkalin/rca-agent
@@ -8,6 +10,9 @@ image:
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
+
+runtime:
+  logLevel: INFO
 
 serviceAccount:
   create: true
@@ -41,6 +46,18 @@ resources:
     cpu: 500m
     memory: 768Mi
 
+probes:
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 6
+  liveness:
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 3
+
 secrets:
   existingSecret: rca-agent-secrets
   keys:
@@ -62,6 +79,8 @@ mysql:
     enabled: true
     size: 10Gi
     storageClass: ""
+    accessModes:
+      - ReadWriteOnce
   resources:
     requests:
       cpu: 100m
@@ -69,6 +88,17 @@ mysql:
     limits:
       cpu: 500m
       memory: 1Gi
+  probes:
+    readiness:
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 12
+    liveness:
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 6
 
 migration:
   enabled: true
