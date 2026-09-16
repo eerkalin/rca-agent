@@ -14,17 +14,59 @@ The chart provides:
 - persistent MySQL PVC
 - migration initContainer (`alembic upgrade head`)
 - read-only ServiceAccount/RBAC for Kubernetes diagnostics
-- readiness and liveness probes
+- configurable CPU/memory requests and limits for RCA Agent and MySQL
+- configurable RCA Agent and MySQL readiness/liveness probes
+- configurable MySQL PVC size, storage class and access modes
+- configurable application log level
 - external Secret references for `DATABASE_URL` and `RCA_MASTER_KEY`
 
-Example:
+The default `values.yaml` is intentionally limited to deployment/runtime settings. Useful defaults for the first acceptance environment are:
+
+```yaml
+replicaCount: 1
+revisionHistoryLimit: 3
+terminationGracePeriodSeconds: 30
+
+runtime:
+  logLevel: INFO
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 768Mi
+
+mysql:
+  image: mysql:8.4
+  database: rca_agent
+  user: rca_agent
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+```
+
+Example install:
 
 ```bash
 kubectl create namespace rca-agent
 
 kubectl -n rca-agent create secret generic rca-agent-secrets \
   --from-literal=database-url='mysql+pymysql://rca_agent:CHANGE_ME@rca-agent-mysql:3306/rca_agent?charset=utf8mb4' \
-  --from-literal=rca-master-key='FERNET_KEY_HERE'
+  --from-literal=rca-master-key='FERNET_KEY_HERE' \
+  --from-literal=mysql-root-password='CHANGE_ROOT_PASSWORD' \
+  --from-literal=mysql-password='CHANGE_APP_PASSWORD'
 
 helm upgrade --install rca-agent ./helm/rca-agent \
   --namespace rca-agent \
@@ -105,6 +147,7 @@ docker run -d \
   -p 8000:8000 \
   -e DATABASE_URL='mysql+pymysql://USER:PASSWORD@MYSQL_HOST:3306/rca_agent?charset=utf8mb4' \
   -e RCA_MASTER_KEY='FERNET_KEY_HERE' \
+  -e LOG_LEVEL='INFO' \
   rca-agent:local
 ```
 
@@ -121,4 +164,4 @@ Do not put investigated-application settings in Helm values, Compose environment
 - per-Application LLM Connection/model
 - provider and LLM credentials (encrypted before storage)
 
-Only bootstrap secrets such as the MySQL DSN and `RCA_MASTER_KEY` belong to deployment configuration.
+Only RCA Agent runtime/deployment settings and bootstrap secrets such as the MySQL DSN and `RCA_MASTER_KEY` belong to deployment configuration.
