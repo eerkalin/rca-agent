@@ -4,7 +4,7 @@ RCA Agent is an application-centric, read-only incident investigation service.
 
 ## Core model
 
-Every investigation belongs to an **Application**. An application defines which diagnostic tools and dependencies are relevant to that system. This prevents the agent from querying unrelated sources and reduces investigation latency and LLM token usage.
+Every investigation belongs to an **Application**. An application defines which diagnostic tools, dependencies, and LLM are relevant to that system. This prevents the agent from querying unrelated sources and reduces investigation latency and LLM token usage.
 
 Application configuration is stored in MySQL and is managed through the API/UI at runtime. Investigated-application source configuration is not stored in Helm values, YAML files, or environment variables.
 
@@ -22,7 +22,7 @@ The data model supports application-specific bindings for:
 - Argo CD
 - Terraform
 
-Executable providers currently implemented:
+Executable evidence providers currently implemented:
 
 - Kubernetes
 - Elasticsearch Logs
@@ -38,7 +38,7 @@ RCA execution is read-only. `app/rca/tool_policy.py` explicitly allowlists diagn
 
 Connection credentials are not returned by APIs and are stored encrypted in `connections.credentials_ciphertext`. Encryption uses a Fernet master key supplied through `RCA_MASTER_KEY`. In Kubernetes, this key must be provided through a Kubernetes Secret, not Helm values.
 
-The master key, MySQL DSN, and LLM API credentials are RCA Agent bootstrap settings. They are intentionally separate from investigated-application configuration.
+The master key and MySQL DSN are RCA Agent bootstrap settings. LLM API credentials for new Applications are configured through Connections in the UI and stored encrypted in MySQL. `GEMINI_API_KEY` remains optional only as a backward-compatible fallback for migrated Applications that have not selected an LLM Connection yet.
 
 ## Web UI
 
@@ -48,7 +48,22 @@ Start the API and open:
 http://127.0.0.1:8000/ui/
 ```
 
-The UI manages Applications, Connections, Application Tools, dependencies, provider-specific settings and encrypted credentials. These settings are persisted in MySQL and take effect without restarting RCA Agent.
+The UI manages Applications, Connections, Application Tools, dependencies, provider-specific settings, per-Application LLM selection, and encrypted credentials. These settings are persisted in MySQL and take effect without restarting RCA Agent.
+
+## Per-Application LLM
+
+Each Application may select its own reusable LLM Connection. Supported provider types are:
+
+- Google Gemini
+- OpenAI
+- Anthropic Claude
+- OpenAI-compatible/local endpoints, including compatible gateways in front of vLLM/Ollama-style deployments
+
+LLM Connections store provider-level settings such as endpoint/default model and encrypted API credentials. The Application stores only its selected `llm_connection_id` and optional per-Application overrides in `llm_config`, for example model, temperature, and maximum output tokens.
+
+This allows different Applications to use different providers or models without restarting RCA Agent. The same encrypted Connection may also be reused by multiple Applications.
+
+The selected LLM is used for both Kubernetes scope resolution and RCA analysis. LLM credentials are decrypted only in backend runtime and are never included in evidence or the prompt context.
 
 ## Investigation strategies
 
@@ -105,14 +120,15 @@ Swagger UI: `http://127.0.0.1:8000/docs`
 ## Application-aware flow
 
 1. Create an Application in `/ui/`.
-2. Create/reuse Connections.
-3. Bind only relevant tools to the Application.
-4. Add dependencies and their diagnostic bindings.
-5. Start Manual RCA with `application_id`, or send a Grafana alert containing one of:
+2. Create/reuse evidence-source Connections.
+3. Create an LLM Connection and select it in the Application's **LLM** section.
+4. Bind only relevant evidence tools to the Application.
+5. Add dependencies and their diagnostic bindings.
+6. Start Manual RCA with `application_id`, or send a Grafana alert containing one of:
    - `labels.application_id`
    - `labels.application_slug`
    - `labels.application`
-6. RCA runs asynchronously and stores status/evidence/result in MySQL.
+7. RCA runs asynchronously and stores status/evidence/result in MySQL.
 
 ## Prometheus connection
 
@@ -128,7 +144,7 @@ The provider uses only Elasticsearch `_search`; it does not expose index/documen
 
 ## Kubernetes runtime connections
 
-Kubernetes is now application-scoped. A Kubernetes Application Tool must reference a Kubernetes Connection, and different Applications may reference different clusters.
+Kubernetes is application-scoped. A Kubernetes Application Tool must reference a Kubernetes Connection, and different Applications may reference different clusters.
 
 Supported connection modes:
 
@@ -178,10 +194,10 @@ This allows one RCA Agent process to investigate multiple Applications in differ
 
 ## Testing connections
 
-The UI exposes **Test** for Prometheus, Elasticsearch and Kubernetes. The equivalent API is:
+The UI exposes **Test** for Prometheus, Elasticsearch, Kubernetes, Gemini, OpenAI, Anthropic, and OpenAI-compatible LLM Connections. The equivalent API is:
 
 ```text
 POST /api/v1/connections/{connection_id}/test
 ```
 
-Kubernetes test performs read-only API access and does not reveal stored credentials.
+Connection tests do not reveal stored credentials.
