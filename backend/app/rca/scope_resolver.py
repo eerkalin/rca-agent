@@ -30,14 +30,48 @@ class ScopeResolver:
             )
         return compact
 
+    @staticmethod
+    def _inventory_for_namespaces(
+        kubernetes: KubernetesProvider,
+        namespaces: list[str] | None,
+        legacy_namespace: str | None,
+    ) -> dict:
+        effective = []
+        for value in namespaces or []:
+            value = str(value).strip()
+            if value and value not in effective:
+                effective.append(value)
+        if not effective and legacy_namespace:
+            effective.append(str(legacy_namespace).strip())
+
+        if not effective:
+            return kubernetes.get_inventory(namespace=None)
+
+        merged = {
+            "deployments": [],
+            "statefulsets": [],
+            "daemonsets": [],
+            "services": [],
+        }
+        for namespace in effective:
+            inventory = kubernetes.get_inventory(namespace=namespace)
+            for key in merged:
+                merged[key].extend(inventory.get(key, []))
+        return merged
+
     def resolve(
         self,
         text: str,
         kubernetes: KubernetesProvider,
         llm,
         namespace: str | None = None,
+        namespaces: list[str] | None = None,
     ) -> ScopeResolution:
-        inventory = kubernetes.get_inventory(namespace=namespace)
+        inventory = self._inventory_for_namespaces(
+            kubernetes=kubernetes,
+            namespaces=namespaces,
+            legacy_namespace=namespace,
+        )
         discovered = ServiceDiscovery.discover(inventory)
         compact = self._compact_services(discovered)
 
