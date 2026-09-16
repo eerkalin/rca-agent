@@ -33,6 +33,10 @@ class ConnectionUpdate(BaseModel):
     enabled: bool | None = None
 
 
+class ConnectionCredentialsUpdate(BaseModel):
+    credentials: dict[str, Any]
+
+
 class ApplicationToolCreate(BaseModel):
     tool_type: str = Field(min_length=1, max_length=100)
     provider_type: str = Field(min_length=1, max_length=100)
