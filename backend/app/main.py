@@ -18,10 +18,7 @@ from app.api.scope import router as scope_router
 from app.db.session import engine
 
 
-app = FastAPI(
-    title="RCA Agent",
-    version="0.6.0",
-)
+app = FastAPI(title="RCA Agent", version="0.7.0")
 
 app.include_router(applications_router, prefix="/api/v1")
 app.include_router(connection_secrets_router, prefix="/api/v1")
@@ -45,18 +42,11 @@ async def root():
 
 @app.get("/api/v1/health")
 async def health():
-    return {
-        "status": "ok",
-        "service": "rca-agent",
-        "version": "0.6.0",
-    }
+    return {"status": "ok", "service": "rca-agent", "version": "0.7.0"}
 
 
 @app.get("/api/v1/health/database")
 async def database_health():
     with engine.connect() as connection:
         connection.execute(text("SELECT 1")).scalar_one()
-    return {
-        "status": "ok",
-        "database": "mysql",
-    }
+    return {"status": "ok", "database": "mysql"}
