@@ -20,6 +20,16 @@ class Settings(BaseSettings):
     # In Kubernetes this must come from a Kubernetes Secret, never values.yaml.
     rca_master_key: str | None = None
 
+    # Authentication is opt-in for backwards compatibility. When enabled, use a
+    # dedicated Fernet key for signed/encrypted session cookies. Do not reuse the
+    # connection-credential master key.
+    auth_enabled: bool = False
+    rca_auth_key: str | None = None
+    auth_session_ttl_seconds: int = 28800
+    auth_cookie_secure: bool = False
+    bootstrap_admin_username: str | None = None
+    bootstrap_admin_password: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
         env_file_encoding="utf-8",
