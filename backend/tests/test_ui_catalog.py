@@ -26,6 +26,16 @@ def test_provider_catalog_matches_runtime_keys():
     assert set(next(x for x in kubernetes["connection_fields"] if x["name"] == "mode")["options"]) == {"in_cluster", "kubeconfig"}
 
 
+def test_llm_catalog_supports_multiple_provider_types():
+    llms = {item["provider_type"]: item for item in PROVIDERS if item.get("category") == "llm"}
+    assert {"gemini", "openai", "anthropic", "openai_compatible"} <= set(llms)
+    for item in llms.values():
+        assert item["implemented"] is True
+        assert item["tool_types"] == []
+        assert any(field["name"] == "model" for field in item["connection_fields"])
+        assert any(field["name"] == "model" for field in item["application_fields"])
+
+
 def test_ui_assets_are_bundled():
     ui_dir = Path(__file__).resolve().parents[1] / "app" / "ui"
     assert (ui_dir / "index.html").is_file()
