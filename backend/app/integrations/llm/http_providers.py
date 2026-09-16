@@ -111,11 +111,13 @@ class OpenAIResponsesProvider(StructuredHTTPProvider):
                     "type": "json_schema",
                     "name": schema.__name__.lower(),
                     "schema": schema.model_json_schema(),
-                    "strict": True,
+                    "strict": bool(self.config.get("strict_schema", False)),
                 }
             },
         }
-        if self.config.get("send_temperature", True):
+        # Some model families do not accept temperature. Keep it opt-in at the
+        # connection level instead of making every Application know that detail.
+        if self.config.get("send_temperature", False):
             body["temperature"] = self.temperature
         with httpx.Client(timeout=self.timeout, verify=self.verify_ssl, headers=self._headers()) as client:
             response = client.post(f"{self.base_url}/responses", json=body)
