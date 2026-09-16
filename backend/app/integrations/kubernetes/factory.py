@@ -9,8 +9,9 @@ from app.integrations.kubernetes.provider import KubernetesProvider
 class KubernetesProviderFactory:
     """Build isolated Kubernetes clients from DB-backed runtime connections.
 
-    The factory never persists kubeconfig data to disk. Kubeconfig credentials are
-    expected to arrive from the encrypted connection credential store.
+    Kubeconfig data is decrypted in memory and loaded directly into a dedicated
+    ``client.Configuration``. It is never intentionally persisted to disk and
+    never copied into RCA evidence or LLM context.
     """
 
     @staticmethod
@@ -26,10 +27,7 @@ class KubernetesProviderFactory:
                 client_configuration=configuration,
             )
         elif mode == "kubeconfig":
-            raw_kubeconfig = (
-                credentials.get("kubeconfig")
-                or credentials.get("kubeconfig_yaml")
-            )
+            raw_kubeconfig = credentials.get("kubeconfig") or credentials.get("kubeconfig_yaml")
             if not raw_kubeconfig:
                 raise ValueError(
                     "Kubernetes kubeconfig mode requires encrypted credential field 'kubeconfig'"
@@ -52,8 +50,8 @@ class KubernetesProviderFactory:
                 persist_config=False,
             )
         elif mode == "local_kubeconfig":
-            # Backward compatibility only. New UI configurations should use
-            # encrypted kubeconfig mode instead of relying on host files.
+            # Legacy compatibility. New UI-created connections use either
+            # in_cluster or encrypted kubeconfig mode.
             kubernetes_config.load_kube_config(
                 context=connection_config.get("context") or None,
                 client_configuration=configuration,
@@ -66,7 +64,15 @@ class KubernetesProviderFactory:
             configuration.verify_ssl = bool(connection_config["verify_ssl"])
 
         api_client = client.ApiClient(configuration=configuration)
-        return KubernetesProvider(
-            api_client=api_client,
-            connection_mode=mode,
-        )
+
+        # KubernetesProvider historically loaded process-global config in its
+        # constructor. Build an isolated instance without invoking that legacy
+        # constructor so different Applications can safely target different
+        # clusters in the same RCA Agent process.
+        provider = KubernetesProvider.__new__(KubernetesProvider)
+        provider.connection_mode = mode
+        provider.core_v1 = client.CoreV1Api(api_client)
+        provider.apps_v1 = client.AppsV1Api(api_client)
+        provider.version_api = client.VersionApi(api_client)
+        provider.api_client = api_client
+        return provider
