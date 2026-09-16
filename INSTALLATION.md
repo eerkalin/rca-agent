@@ -2,6 +2,24 @@
 
 RCA Agent supports three deployment modes. All investigated-application configuration (Applications, Connections, Tools, Dependencies, LLM selection and encrypted provider credentials) remains runtime configuration in MySQL and is managed through the UI/API. Deployment files contain only RCA Agent bootstrap settings.
 
+## Container publishing
+
+The repository publishes multi-architecture images to GitHub Container Registry (GHCR):
+
+```text
+ghcr.io/eerkalin/rca-agent
+```
+
+The GitHub Actions workflow publishes on pushes to `main`, version tags matching `v*`, and manual dispatch. It produces:
+
+- `main` for the latest main-branch build
+- `sha-<commit>` for immutable commit builds
+- semantic-version tags such as `0.8.0`, `0.8`, and `0` from Git tags such as `v0.8.0`
+
+For Kubernetes deployments, prefer an immutable semantic-version tag such as `0.8.0` rather than `main`.
+
+If the GHCR package is Public, Kubernetes/k3s can pull it without `imagePullSecrets`. Repository visibility and package visibility are separate settings in GitHub, so verify that the `rca-agent` package itself is Public after the first image is published.
+
 ## 1. Helm chart (recommended for Kubernetes / k3s)
 
 Use this for the acceptance environment on k3s and for production-like Kubernetes deployments.
@@ -26,6 +44,13 @@ The default `values.yaml` is intentionally limited to deployment/runtime setting
 replicaCount: 1
 revisionHistoryLimit: 3
 terminationGracePeriodSeconds: 30
+
+image:
+  repository: ghcr.io/eerkalin/rca-agent
+  tag: 0.8.0
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
 
 runtime:
   logLevel: INFO
@@ -57,7 +82,7 @@ mysql:
       memory: 1Gi
 ```
 
-Example install:
+Example install with a public GHCR package:
 
 ```bash
 kubectl create namespace rca-agent
@@ -70,8 +95,8 @@ kubectl -n rca-agent create secret generic rca-agent-secrets \
 
 helm upgrade --install rca-agent ./helm/rca-agent \
   --namespace rca-agent \
-  --set image.repository=YOUR_REGISTRY/rca-agent \
-  --set image.tag=YOUR_TAG
+  --set image.repository=ghcr.io/eerkalin/rca-agent \
+  --set image.tag=0.8.0
 ```
 
 For the `otel-demo` acceptance test, create the Kubernetes Connection from the UI with `mode=in_cluster` and bind the Application Tool to namespace `otel-demo`.
@@ -122,10 +147,16 @@ When RCA Agent runs outside Kubernetes, use a `kubeconfig` Kubernetes Connection
 
 Use this when MySQL is already provided separately and you only want the RCA Agent container.
 
-Build:
+Build locally:
 
 ```bash
 docker build -t rca-agent:local .
+```
+
+Or pull a published public image:
+
+```bash
+docker pull ghcr.io/eerkalin/rca-agent:0.8.0
 ```
 
 Apply migrations against the external MySQL instance:
@@ -134,7 +165,7 @@ Apply migrations against the external MySQL instance:
 docker run --rm \
   -e DATABASE_URL='mysql+pymysql://USER:PASSWORD@MYSQL_HOST:3306/rca_agent?charset=utf8mb4' \
   -e RCA_MASTER_KEY='FERNET_KEY_HERE' \
-  rca-agent:local \
+  ghcr.io/eerkalin/rca-agent:0.8.0 \
   alembic upgrade head
 ```
 
@@ -148,7 +179,7 @@ docker run -d \
   -e DATABASE_URL='mysql+pymysql://USER:PASSWORD@MYSQL_HOST:3306/rca_agent?charset=utf8mb4' \
   -e RCA_MASTER_KEY='FERNET_KEY_HERE' \
   -e LOG_LEVEL='INFO' \
-  rca-agent:local
+  ghcr.io/eerkalin/rca-agent:0.8.0
 ```
 
 The standalone image intentionally does not bundle MySQL. Persistence, backup and HA of the external database remain the operator's responsibility.
