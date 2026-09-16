@@ -43,6 +43,17 @@ def test_llm_catalog_supports_multiple_provider_types():
         assert any(field["name"] == "model" for field in item["application_fields"])
 
 
+def test_gemini_is_native_and_does_not_require_base_url():
+    gemini = next(item for item in PROVIDERS if item["provider_type"] == "gemini")
+    connection_fields = {item["name"] for item in gemini["connection_fields"]}
+    credential_fields = {item["name"] for item in gemini["credential_fields"]}
+
+    assert gemini["label"] == "Google Gemini"
+    assert "model" in connection_fields
+    assert "base_url" not in connection_fields
+    assert "api_key" in credential_fields
+
+
 def test_ui_assets_are_bundled():
     ui_dir = Path(__file__).resolve().parents[1] / "app" / "ui"
     assert (ui_dir / "index.html").is_file()
