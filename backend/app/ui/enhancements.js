@@ -17,31 +17,24 @@ renderConnections = function() {
   const root = qs('#connections-list');
   root.innerHTML = connections.map(c => {
     const p = provider(c.provider_type);
-    const canTest = ['prometheus','elasticsearch','kubernetes','gemini','openai','anthropic','openai_compatible'].includes(c.provider_type);
+    const canTest = ['prometheus','elasticsearch','elastic_apm','kubernetes','gemini','openai','anthropic','openai_compatible'].includes(c.provider_type);
     return `<div class="card"><h3>${esc(c.name)}</h3><div class="meta">${esc(p?.label||c.provider_type)} · ${c.enabled?'enabled':'disabled'}</div><p>${esc(c.config?.base_url||c.config?.context||c.config?.model||c.config?.mode||'Runtime connection')}</p><span class="badge ${c.has_credentials?'ok':''}">${c.has_credentials?'credentials saved':'no credentials'}</span><div class="actions"><button onclick="openConnectionEditor(${c.id})">Edit</button>${canTest?`<button onclick="testConnection(${c.id})">Test</button>`:''}<button class="danger" onclick="deleteConnection(${c.id})">Delete</button></div></div>`;
   }).join('') || '<p>No connections configured yet.</p>';
 };
 
-// Add LLM settings as a dedicated Application section. Connection credentials
-// remain write-only in the Connections screen; Applications only select a
-// connection and optionally override model/runtime parameters.
 const baseOpenApplicationEditor = openApplicationEditor;
 openApplicationEditor = async function(id=null) {
   await baseOpenApplicationEditor(id);
   if (!id) return;
-
   const app = await api(`/applications/${id}`);
   const root = qs('#application-editor');
   const llmConnections = connections.filter(c => isLLMProvider(c.provider_type) && c.enabled);
   const panel = document.createElement('div');
   panel.className = 'subpanel';
   panel.id = 'application-llm-panel';
-  const selected = connections.find(c => c.id === app.llm_connection_id);
   panel.innerHTML = `<h2>LLM</h2><p class="hint">Choose the LLM used for scope resolution and RCA for this Application. Connection/API credentials are encrypted in MySQL.</p><div class="grid"><label>LLM connection<select id="app-llm-connection"><option value="">Legacy default Gemini</option>${llmConnections.map(c=>`<option value="${c.id}" ${c.id===app.llm_connection_id?'selected':''}>${esc(c.name)} · ${esc(provider(c.provider_type)?.label||c.provider_type)}</option>`).join('')}</select></label></div><div id="app-llm-fields" class="grid"></div><div class="actions"><button class="primary" id="save-app-llm">Save LLM settings</button></div>`;
-
   const firstSubpanel = root.querySelector('.subpanel');
   if (firstSubpanel) root.insertBefore(panel, firstSubpanel); else root.appendChild(panel);
-
   const render = () => {
     const connectionId = Number(qs('#app-llm-connection').value || 0);
     const connection = connections.find(c => c.id === connectionId);
@@ -63,8 +56,6 @@ openApplicationEditor = async function(id=null) {
   };
 };
 
-// LLM providers are Connections, not diagnostic tools. Hide them from tool
-// provider dropdowns while keeping them available on the Connections page.
 const baseToolForm = toolForm;
 toolForm = function(app, existing=null) {
   baseToolForm(app, existing);
