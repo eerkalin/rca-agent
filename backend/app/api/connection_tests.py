@@ -4,7 +4,9 @@ from app.applications.repository import ConnectionRepository
 from app.applications.runtime import RuntimeConnectionResolver
 from app.db.session import SessionLocal
 from app.integrations.elasticsearch.provider import ElasticsearchLogsProvider
+from app.integrations.kubernetes.factory import KubernetesProviderFactory
 from app.integrations.prometheus.provider import PrometheusProvider
+from app.rca.tool_policy import ToolPolicy
 
 
 router = APIRouter(tags=["connections"])
@@ -29,6 +31,9 @@ async def test_connection(connection_id: int):
                 result = ElasticsearchLogsProvider(
                     runtime["config"], runtime["credentials"]
                 ).test_connection()
+            elif provider_type == "kubernetes":
+                ToolPolicy.assert_allowed("kubernetes", "list_namespaces")
+                result = KubernetesProviderFactory.create(runtime).test_connection()
             else:
                 raise ValueError(
                     f"Connection test is not implemented for provider {provider_type}"
