@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any, Type
 
 import httpx
@@ -71,12 +70,69 @@ class _ConnectionTest(BaseModel):
     status: str
 
 
+class OpenAIResponsesProvider(StructuredHTTPProvider):
+    provider_type = "openai"
+
+    def __init__(self, config=None, credentials=None, model_config=None):
+        super().__init__(config, credentials, model_config)
+        self.base_url = str(self.config.get("base_url") or "https://api.openai.com/v1").rstrip("/")
+        if not self.model:
+            raise ValueError("OpenAI LLM requires an application model or connection default_model")
+
+    def _headers(self) -> dict[str, str]:
+        api_key = self.credentials.get("api_key")
+        if not api_key:
+            raise ValueError("OpenAI connection requires encrypted credential api_key")
+        return {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+    @staticmethod
+    def _response_text(payload: dict) -> str:
+        if payload.get("output_text"):
+            return str(payload["output_text"])
+        chunks: list[str] = []
+        for item in payload.get("output") or []:
+            for content in item.get("content") or []:
+                if content.get("type") == "output_text" and content.get("text"):
+                    chunks.append(str(content["text"]))
+        return "".join(chunks)
+
+    def _generate_json(self, prompt: str, schema: Type[BaseModel]) -> BaseModel:
+        body: dict[str, Any] = {
+            "model": self.model,
+            "instructions": "Return only data matching the required JSON schema.",
+            "input": prompt,
+            "max_output_tokens": self.max_output_tokens,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": schema.__name__.lower(),
+                    "schema": schema.model_json_schema(),
+                    "strict": True,
+                }
+            },
+        }
+        if self.config.get("send_temperature", True):
+            body["temperature"] = self.temperature
+        with httpx.Client(timeout=self.timeout, verify=self.verify_ssl, headers=self._headers()) as client:
+            response = client.post(f"{self.base_url}/responses", json=body)
+            response.raise_for_status()
+            payload = response.json()
+        text = self._response_text(payload)
+        if not text:
+            raise RuntimeError(f"OpenAI response contained no output text: {payload}")
+        return schema.model_validate_json(_strip_json_fence(text))
+
+
 class OpenAICompatibleProvider(StructuredHTTPProvider):
     provider_type = "openai_compatible"
 
     def __init__(self, config=None, credentials=None, model_config=None):
         super().__init__(config, credentials, model_config)
-        self.base_url = str(self.config.get("base_url") or "https://api.openai.com/v1").rstrip("/")
+        self.base_url = str(self.config.get("base_url") or "http://localhost:8000/v1").rstrip("/")
         if not self.model:
             raise ValueError("OpenAI-compatible LLM requires an application model or connection default_model")
 
