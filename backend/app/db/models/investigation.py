@@ -16,7 +16,7 @@ class Investigation(Base):
     )
 
     application_id: Mapped[int | None] = mapped_column(
-        ForeignKey("applications.id"), nullable=True, index=True
+        ForeignKey("applications.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     trigger_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
