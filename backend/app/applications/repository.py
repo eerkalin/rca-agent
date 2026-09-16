@@ -32,6 +32,10 @@ class ApplicationRepository:
         return db.scalar(select(Application).where(Application.slug == slug))
 
     @staticmethod
+    def get_by_name(db: Session, name: str) -> Application | None:
+        return db.scalar(select(Application).where(Application.name == name))
+
+    @staticmethod
     def update(db: Session, item: Application, **values) -> Application:
         for key, value in values.items():
             setattr(item, key, value)
