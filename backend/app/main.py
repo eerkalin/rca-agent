@@ -20,7 +20,7 @@ from app.db.session import engine
 
 app = FastAPI(
     title="RCA Agent",
-    version="0.4.0",
+    version="0.5.0",
 )
 
 app.include_router(applications_router, prefix="/api/v1")
@@ -48,7 +48,7 @@ async def health():
     return {
         "status": "ok",
         "service": "rca-agent",
-        "version": "0.4.0",
+        "version": "0.5.0",
     }
 
 
