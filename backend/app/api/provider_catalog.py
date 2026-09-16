@@ -96,7 +96,7 @@ PROVIDERS = [
         ],
         "credential_fields": [{"name": "kubeconfig", "label": "Kubeconfig YAML", "type": "textarea-password", "required": False, "sensitive": True}],
         "tool_fields": [
-            {"name": "namespace", "label": "Namespace", "type": "text", "required": True},
+            {"name": "namespaces", "label": "Namespaces", "type": "tags", "required": True, "placeholder": "otel-demo, payments, shared-services"},
             {"name": "tail_lines", "label": "Log tail lines", "type": "number", "default": 50},
         ],
     },
