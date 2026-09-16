@@ -60,4 +60,5 @@ def test_ui_assets_are_bundled():
     assert (ui_dir / "app.js").is_file()
     assert (ui_dir / "enhancements.js").is_file()
     assert (ui_dir / "application-detail.js").is_file()
+    assert (ui_dir / "connection-detail.js").is_file()
     assert (ui_dir / "styles.css").is_file()
