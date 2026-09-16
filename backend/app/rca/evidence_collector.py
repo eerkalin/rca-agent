@@ -6,7 +6,15 @@ from app.rca.tool_policy import ToolPolicy
 
 class EvidenceCollector:
     def __init__(self):
-        self.kubernetes = KubernetesProvider()
+        self._kubernetes = None
+
+    @property
+    def kubernetes(self) -> KubernetesProvider:
+        # Non-Kubernetes applications must not require kubeconfig or in-cluster
+        # credentials merely because the RCA Agent supports Kubernetes.
+        if self._kubernetes is None:
+            self._kubernetes = KubernetesProvider()
+        return self._kubernetes
 
     def collect_for_service(
         self,
