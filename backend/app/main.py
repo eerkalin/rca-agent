@@ -10,6 +10,7 @@ from sqlalchemy import text
 from app.api.ai import router as ai_router
 from app.api.alerts import router as alerts_router
 from app.api.applications import router as applications_router
+from app.api.auth import router as auth_router
 from app.api.connection_secrets import router as connection_secrets_router
 from app.api.connection_tests import router as connection_tests_router
 from app.api.evidence import router as evidence_router
@@ -17,9 +18,12 @@ from app.api.investigations import router as investigations_router
 from app.api.kubernetes import router as kubernetes_router
 from app.api.provider_catalog import router as provider_catalog_router
 from app.api.scope import router as scope_router
+from app.auth.middleware import auth_rbac_middleware
+from app.auth.security import SessionTokenService
+from app.auth.service import AuthenticationService
 from app.config import settings
 from app.db.schema_compat import assert_schema_current, schema_status
-from app.db.session import engine
+from app.db.session import SessionLocal, engine
 from app.observability.logging import configure_logging, elapsed_ms, log_event, set_request_id
 
 
@@ -27,6 +31,7 @@ configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="RCA Agent", version="0.7.0")
+app.middleware("http")(auth_rbac_middleware)
 
 
 @app.middleware("http")
@@ -77,6 +82,7 @@ async def request_logging_middleware(request: Request, call_next):
     return response
 
 
+app.include_router(auth_router, prefix="/api/v1")
 app.include_router(applications_router, prefix="/api/v1")
 app.include_router(connection_secrets_router, prefix="/api/v1")
 app.include_router(connection_tests_router, prefix="/api/v1")
@@ -95,6 +101,16 @@ app.mount("/ui", StaticFiles(directory=ui_dir, html=True), name="ui")
 @app.on_event("startup")
 async def verify_database_schema() -> None:
     assert_schema_current(engine)
+    if settings.auth_enabled:
+        # Fail fast on an invalid/missing session key instead of serving a UI
+        # that can never authenticate.
+        SessionTokenService(settings.rca_auth_key, settings.auth_session_ttl_seconds)
+        with SessionLocal() as db:
+            AuthenticationService.bootstrap_admin(
+                db=db,
+                username=settings.bootstrap_admin_username,
+                password=settings.bootstrap_admin_password,
+            )
 
 
 @app.get("/", include_in_schema=False)
@@ -104,7 +120,12 @@ async def root():
 
 @app.get("/api/v1/health")
 async def health():
-    return {"status": "ok", "service": "rca-agent", "version": "0.7.0"}
+    return {
+        "status": "ok",
+        "service": "rca-agent",
+        "version": "0.7.0",
+        "auth_enabled": settings.auth_enabled,
+    }
 
 
 @app.get("/api/v1/health/database")
