@@ -109,6 +109,14 @@ jobs:
           --set image.repository=rca-agent
           --set image.tag=ci
 
+      - name: Render Helm chart with authentication enabled
+        run: >-
+          helm template rca-agent helm/rca-agent
+          --namespace rca-agent
+          --set image.repository=rca-agent
+          --set image.tag=ci
+          --set auth.enabled=true
+
   upgrade-compatibility:
     runs-on: ubuntu-latest
 
@@ -148,7 +156,7 @@ jobs:
 
       - name: Build previous supported schema
         working-directory: backend
-        run: alembic upgrade c1a2b3c4d5e6
+        run: alembic upgrade e3f4a5b6c7d8
 
       - name: Verify previous schema is detected as stale
         working-directory: backend
