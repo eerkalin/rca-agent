@@ -34,15 +34,24 @@ class ScopeResolver:
     def _inventory_for_namespaces(
         kubernetes: KubernetesProvider,
         namespaces: list[str] | None,
-        legacy_namespace: str | None,
+        legacy_namespace: str | list[str] | None,
     ) -> dict:
-        effective = []
+        effective: list[str] = []
+
+        def add(value) -> None:
+            text = str(value).strip()
+            if text and text not in effective:
+                effective.append(text)
+
         for value in namespaces or []:
-            value = str(value).strip()
-            if value and value not in effective:
-                effective.append(value)
+            add(value)
+
         if not effective and legacy_namespace:
-            effective.append(str(legacy_namespace).strip())
+            if isinstance(legacy_namespace, list):
+                for value in legacy_namespace:
+                    add(value)
+            else:
+                add(legacy_namespace)
 
         if not effective:
             return kubernetes.get_inventory(namespace=None)
@@ -64,7 +73,7 @@ class ScopeResolver:
         text: str,
         kubernetes: KubernetesProvider,
         llm,
-        namespace: str | None = None,
+        namespace: str | list[str] | None = None,
         namespaces: list[str] | None = None,
     ) -> ScopeResolution:
         inventory = self._inventory_for_namespaces(
