@@ -5,7 +5,10 @@ terminationGracePeriodSeconds: 30
 image:
   repository: ghcr.io/eerkalin/rca-agent
   tag: main
-  pullPolicy: IfNotPresent
+  # `main` is a floating acceptance tag, so always check the registry for a
+  # newer digest. Operators using immutable release tags can override this to
+  # IfNotPresent.
+  pullPolicy: Always
 
 imagePullSecrets: []
 nameOverride: ""
