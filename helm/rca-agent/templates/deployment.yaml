@@ -104,6 +104,26 @@ spec:
                   optional: true
             - name: LOG_LEVEL
               value: {{ .Values.runtime.logLevel | quote }}
+            - name: AUTH_ENABLED
+              value: {{ .Values.auth.enabled | quote }}
+            - name: AUTH_SESSION_TTL_SECONDS
+              value: {{ .Values.auth.sessionTtlSeconds | quote }}
+            - name: AUTH_COOKIE_SECURE
+              value: {{ .Values.auth.cookieSecure | quote }}
+            {{- if .Values.auth.enabled }}
+            - name: RCA_AUTH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "rca-agent.bootstrapSecretName" . }}
+                  key: {{ .Values.secrets.keys.authKey }}
+            - name: BOOTSTRAP_ADMIN_USERNAME
+              value: {{ .Values.auth.bootstrapAdminUsername | quote }}
+            - name: BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "rca-agent.bootstrapSecretName" . }}
+                  key: {{ .Values.secrets.keys.bootstrapAdminPassword }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /api/v1/health/database
