@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RCA Agent</title>
+  <link rel="stylesheet" href="/ui/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><strong>RCA Agent</strong><span class="muted"> application-centric RCA</span></div>
+    <nav><button data-view="applications">Applications</button><button data-view="connections">Connections</button></nav>
+  </header>
+  <main>
+    <section id="applications-view" class="view">
+      <div class="section-head"><div><h1>Applications</h1><p>Investigation scope, tools and dependencies are stored in MySQL.</p></div><button id="new-application">New application</button></div>
+      <div id="applications-list" class="cards"></div>
+      <div id="application-editor" class="panel hidden"></div>
+    </section>
+
+    <section id="connections-view" class="view hidden">
+      <div class="section-head"><div><h1>Connections</h1><p>Reusable provider connections. Secrets are encrypted before they are stored in MySQL.</p></div><button id="new-connection">New connection</button></div>
+      <div id="connections-list" class="cards"></div>
+      <div id="connection-editor" class="panel hidden"></div>
+    </section>
+  </main>
+  <div id="toast" class="toast hidden"></div>
+  <script src="/ui/app.js"></script>
+</body>
+</html>
