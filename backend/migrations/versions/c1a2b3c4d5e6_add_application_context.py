@@ -98,7 +98,14 @@ def upgrade() -> None:
 
     op.add_column("alerts", sa.Column("application_id", sa.Integer(), nullable=True))
     op.create_index("ix_alerts_application_id", "alerts", ["application_id"], unique=False)
-    op.create_foreign_key("fk_alerts_application_id", "alerts", "applications", ["application_id"], ["id"])
+    op.create_foreign_key(
+        "fk_alerts_application_id",
+        "alerts",
+        "applications",
+        ["application_id"],
+        ["id"],
+        ondelete="SET NULL",
+    )
 
     op.add_column("investigations", sa.Column("application_id", sa.Integer(), nullable=True))
     op.add_column("investigations", sa.Column("error", sa.Text(), nullable=True))
@@ -111,6 +118,7 @@ def upgrade() -> None:
         "applications",
         ["application_id"],
         ["id"],
+        ondelete="SET NULL",
     )
     op.alter_column("investigations", "scope", existing_type=sa.JSON(), nullable=True)
     op.alter_column("investigations", "evidence", existing_type=sa.JSON(), nullable=True)
