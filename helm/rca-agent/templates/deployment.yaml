@@ -49,23 +49,23 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secrets.existingSecret }}
+                  name: {{ include "rca-agent.bootstrapSecretName" . }}
                   key: {{ .Values.secrets.keys.databaseUrl }}
             - name: RCA_MASTER_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secrets.existingSecret }}
+                  name: {{ include "rca-agent.bootstrapSecretName" . }}
                   key: {{ .Values.secrets.keys.masterKey }}
             - name: GEMINI_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secrets.existingSecret }}
+                  name: {{ include "rca-agent.bootstrapSecretName" . }}
                   key: {{ .Values.secrets.keys.legacyGeminiApiKey }}
                   optional: true
             - name: GEMINI_MODEL
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secrets.existingSecret }}
+                  name: {{ include "rca-agent.bootstrapSecretName" . }}
                   key: {{ .Values.secrets.keys.legacyGeminiModel }}
                   optional: true
             - name: LOG_LEVEL
@@ -83,23 +83,23 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secrets.existingSecret }}
+                  name: {{ include "rca-agent.bootstrapSecretName" . }}
                   key: {{ .Values.secrets.keys.databaseUrl }}
             - name: RCA_MASTER_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secrets.existingSecret }}
+                  name: {{ include "rca-agent.bootstrapSecretName" . }}
                   key: {{ .Values.secrets.keys.masterKey }}
             - name: GEMINI_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secrets.existingSecret }}
+                  name: {{ include "rca-agent.bootstrapSecretName" . }}
                   key: {{ .Values.secrets.keys.legacyGeminiApiKey }}
                   optional: true
             - name: GEMINI_MODEL
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secrets.existingSecret }}
+                  name: {{ include "rca-agent.bootstrapSecretName" . }}
                   key: {{ .Values.secrets.keys.legacyGeminiModel }}
                   optional: true
             - name: LOG_LEVEL
