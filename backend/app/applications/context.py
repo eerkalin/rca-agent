@@ -58,6 +58,8 @@ class ApplicationContextService:
                 "slug": application.slug,
                 "description": application.description,
                 "investigation_strategy": application.investigation_strategy,
+                "llm_connection_id": application.llm_connection_id,
+                "llm_config": application.llm_config or {},
             },
             "tools": [
                 {
