@@ -66,4 +66,5 @@ def test_ui_assets_are_bundled():
     assert (ui_dir / "friendly-ui.js").is_file()
     assert (ui_dir / "binding-hardening.js").is_file()
     assert (ui_dir / "auth-ui.js").is_file()
+    assert (ui_dir / "investigations-ui.js").is_file()
     assert (ui_dir / "styles.css").is_file()
