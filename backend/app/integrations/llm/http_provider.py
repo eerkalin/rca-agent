@@ -93,11 +93,13 @@ class OpenAICompatibleProvider(BaseHTTPLLMProvider):
         super().__init__(config, credentials, application_config)
         self.base_url = str(self.config.get("base_url") or "https://api.openai.com/v1").rstrip("/")
         self.api_key = self.credentials.get("api_key") or self.credentials.get("token")
-        if not self.api_key:
-            raise ValueError("OpenAI-compatible LLM requires encrypted api_key credential")
+        if self.config.get("provider_type") == "openai" and not self.api_key:
+            raise ValueError("OpenAI requires encrypted api_key credential")
 
     def _generate_json(self, prompt: str, schema_name: str) -> str:
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         body = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
