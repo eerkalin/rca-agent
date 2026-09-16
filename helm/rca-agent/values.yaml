@@ -1,0 +1,110 @@
+replicaCount: 1
+revisionHistoryLimit: 3
+terminationGracePeriodSeconds: 30
+
+image:
+  repository: ghcr.io/eerkalin/rca-agent
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+runtime:
+  logLevel: INFO
+
+serviceAccount:
+  create: true
+  name: ""
+
+rbac:
+  create: true
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+  nodePort: null
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: rca-agent.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 768Mi
+
+probes:
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 6
+  liveness:
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+secrets:
+  existingSecret: rca-agent-secrets
+  keys:
+    databaseUrl: database-url
+    masterKey: rca-master-key
+    legacyGeminiApiKey: gemini-api-key
+    legacyGeminiModel: gemini-model
+
+mysql:
+  enabled: true
+  image: mysql:8.4
+  database: rca_agent
+  user: rca_agent
+  authSecret: rca-agent-secrets
+  authKeys:
+    rootPassword: mysql-root-password
+    password: mysql-password
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  probes:
+    readiness:
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 12
+    liveness:
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 6
+
+migration:
+  enabled: true
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

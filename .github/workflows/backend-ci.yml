@@ -4,12 +4,24 @@ on:
   pull_request:
     paths:
       - "backend/**"
+      - "helm/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker-compose.yml"
+      - ".env.docker.example"
+      - "INSTALLATION.md"
       - ".github/workflows/backend-ci.yml"
   push:
     branches:
       - main
     paths:
       - "backend/**"
+      - "helm/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker-compose.yml"
+      - ".env.docker.example"
+      - "INSTALLATION.md"
 
 jobs:
   backend:
@@ -63,3 +75,27 @@ jobs:
       - name: Import FastAPI application
         working-directory: backend
         run: python -c "from app.main import app; print(app.title, app.version)"
+
+      - name: Build container image
+        run: docker build -t rca-agent:ci .
+
+      - name: Validate Docker Compose
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_PASSWORD: ci-database-password
+          RCA_MASTER_KEY: ci-placeholder
+        run: docker compose config --quiet
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+
+      - name: Lint Helm chart
+        run: helm lint helm/rca-agent
+
+      - name: Render Helm chart
+        run: >-
+          helm template rca-agent helm/rca-agent
+          --namespace rca-agent
+          --set image.repository=rca-agent
+          --set image.tag=ci

@@ -2,33 +2,72 @@ services:
   mysql:
     image: mysql:8.4
     container_name: rca-agent-mysql
-
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: rca_agent
-      MYSQL_USER: rca_agent
-      MYSQL_PASSWORD: rca_agent_password
-
-    ports:
-      - "3306:3306"
-
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env.docker}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-rca_agent}
+      MYSQL_USER: ${MYSQL_USER:-rca_agent}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env.docker}
     volumes:
       - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
 
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${RCA_AGENT_IMAGE:-rca-agent:local}
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-rca_agent}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-rca_agent}?charset=utf8mb4
+      RCA_MASTER_KEY: ${RCA_MASTER_KEY:?set RCA_MASTER_KEY in .env.docker}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+    command: ["alembic", "upgrade", "head"]
+
+  rca-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${RCA_AGENT_IMAGE:-rca-agent:local}
+    container_name: rca-agent
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-rca_agent}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-rca_agent}?charset=utf8mb4
+      RCA_MASTER_KEY: ${RCA_MASTER_KEY:?set RCA_MASTER_KEY in .env.docker}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+    ports:
+      - "${RCA_AGENT_PORT:-8000}:8000"
     healthcheck:
       test:
         [
           "CMD",
-          "mysqladmin",
-          "ping",
-          "-h",
-          "localhost",
-          "-uroot",
-          "-prootpassword"
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"
         ]
-      interval: 5s
+      interval: 10s
       timeout: 5s
-      retries: 20
+      retries: 12
+      start_period: 10s
 
 volumes:
   mysql_data:

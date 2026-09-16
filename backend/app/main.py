@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -15,8 +16,11 @@ from app.api.investigations import router as investigations_router
 from app.api.kubernetes import router as kubernetes_router
 from app.api.provider_catalog import router as provider_catalog_router
 from app.api.scope import router as scope_router
+from app.config import settings
 from app.db.session import engine
 
+
+logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 
 app = FastAPI(title="RCA Agent", version="0.7.0")
 
