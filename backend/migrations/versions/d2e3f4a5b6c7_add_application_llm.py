@@ -22,7 +22,14 @@ def upgrade() -> None:
     )
     op.add_column(
         "applications",
-        sa.Column("llm_config", sa.JSON(), nullable=False, server_default=sa.text("('{}')")),
+        sa.Column("llm_config", sa.JSON(), nullable=True),
+    )
+    op.execute("UPDATE applications SET llm_config = JSON_OBJECT() WHERE llm_config IS NULL")
+    op.alter_column(
+        "applications",
+        "llm_config",
+        existing_type=sa.JSON(),
+        nullable=False,
     )
     op.create_index(
         "ix_applications_llm_connection_id",
@@ -38,7 +45,6 @@ def upgrade() -> None:
         ["id"],
         ondelete="SET NULL",
     )
-    op.alter_column("applications", "llm_config", server_default=None)
 
 
 def downgrade() -> None:
