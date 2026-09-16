@@ -6,24 +6,13 @@ from app.rca.scope_models import ScopeResolution
 
 class ScopeResolver:
     def __init__(self):
-        self._kubernetes = None
         self.gemini = GeminiProvider()
 
-    @property
-    def kubernetes(self) -> KubernetesProvider:
-        if self._kubernetes is None:
-            self._kubernetes = KubernetesProvider()
-        return self._kubernetes
-
     @staticmethod
-    def _compact_services(
-        services: list[dict],
-    ) -> list[dict]:
+    def _compact_services(services: list[dict]) -> list[dict]:
         compact = []
-
         for service in services:
             workloads = []
-
             for workload in service.get("workloads", []):
                 workloads.append(
                     {
@@ -43,15 +32,15 @@ class ScopeResolver:
                     "workloads": workloads,
                 }
             )
-
         return compact
 
     def resolve(
         self,
         text: str,
+        kubernetes: KubernetesProvider,
         namespace: str | None = None,
     ) -> ScopeResolution:
-        inventory = self.kubernetes.get_inventory(namespace=namespace)
+        inventory = kubernetes.get_inventory(namespace=namespace)
         discovered = ServiceDiscovery.discover(inventory)
         compact = self._compact_services(discovered)
 

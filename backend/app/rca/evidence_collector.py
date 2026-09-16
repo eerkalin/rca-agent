@@ -5,25 +5,15 @@ from app.rca.tool_policy import ToolPolicy
 
 
 class EvidenceCollector:
-    def __init__(self):
-        self._kubernetes = None
-
-    @property
-    def kubernetes(self) -> KubernetesProvider:
-        # Non-Kubernetes applications must not require kubeconfig or in-cluster
-        # credentials merely because the RCA Agent supports Kubernetes.
-        if self._kubernetes is None:
-            self._kubernetes = KubernetesProvider()
-        return self._kubernetes
-
     def collect_for_service(
         self,
+        kubernetes: KubernetesProvider,
         namespace: str,
         service_name: str,
         tail_lines: int = 100,
     ) -> dict:
         ToolPolicy.assert_allowed("kubernetes", "get_inventory")
-        inventory = self.kubernetes.get_inventory(namespace=namespace)
+        inventory = kubernetes.get_inventory(namespace=namespace)
 
         service = next(
             (
@@ -44,13 +34,13 @@ class EvidenceCollector:
         selector = service.get("selector", {})
 
         ToolPolicy.assert_allowed("kubernetes", "list_pods")
-        pods = self.kubernetes.list_pods_for_selector(
+        pods = kubernetes.list_pods_for_selector(
             namespace=namespace,
             selector=selector,
         )
 
         ToolPolicy.assert_allowed("kubernetes", "get_endpoints")
-        endpoints = self.kubernetes.get_service_endpoints(
+        endpoints = kubernetes.get_service_endpoints(
             namespace=namespace,
             service_name=service_name,
         )
@@ -62,7 +52,7 @@ class EvidenceCollector:
                 container_name = container["name"]
                 try:
                     ToolPolicy.assert_allowed("kubernetes", "get_logs")
-                    current_logs = self.kubernetes.get_pod_logs(
+                    current_logs = kubernetes.get_pod_logs(
                         namespace=namespace,
                         pod_name=pod["name"],
                         container=container_name,
@@ -75,7 +65,7 @@ class EvidenceCollector:
                 if container["restart_count"] > 0:
                     try:
                         ToolPolicy.assert_allowed("kubernetes", "get_logs")
-                        previous_logs = self.kubernetes.get_pod_logs(
+                        previous_logs = kubernetes.get_pod_logs(
                             namespace=namespace,
                             pod_name=pod["name"],
                             container=container_name,
@@ -91,7 +81,7 @@ class EvidenceCollector:
                 }
 
             ToolPolicy.assert_allowed("kubernetes", "get_events")
-            events = self.kubernetes.get_events_for_resource(
+            events = kubernetes.get_events_for_resource(
                 namespace=namespace,
                 resource_name=pod["name"],
             )

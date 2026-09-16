@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ApplicationCreate(BaseModel):
@@ -44,6 +44,12 @@ class ApplicationToolCreate(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
     priority: int = Field(default=100, ge=0, le=10000)
+
+    @model_validator(mode="after")
+    def validate_runtime_connection(self):
+        if self.provider_type == "kubernetes" and self.connection_id is None:
+            raise ValueError("Kubernetes tool requires connection_id")
+        return self
 
 
 class ApplicationToolUpdate(BaseModel):

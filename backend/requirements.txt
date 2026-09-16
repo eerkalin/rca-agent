@@ -4,6 +4,7 @@ PyMySQL
 pydantic-settings
 alembic
 kubernetes
+PyYAML
 google-genai
 cryptography
 httpx
