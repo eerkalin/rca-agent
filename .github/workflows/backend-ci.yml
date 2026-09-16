@@ -10,6 +10,7 @@ on:
       - "docker-compose.yml"
       - ".env.docker.example"
       - "INSTALLATION.md"
+      - "docs/**"
       - ".github/workflows/backend-ci.yml"
       - ".github/workflows/container-publish.yml"
   push:
@@ -23,6 +24,8 @@ on:
       - "docker-compose.yml"
       - ".env.docker.example"
       - "INSTALLATION.md"
+      - "docs/**"
+      - ".github/workflows/backend-ci.yml"
       - ".github/workflows/container-publish.yml"
 
 jobs:
@@ -70,9 +73,13 @@ jobs:
         working-directory: backend
         run: python -m pytest -q
 
-      - name: Apply database migrations
+      - name: Apply database migrations from empty database
         working-directory: backend
         run: alembic upgrade head
+
+      - name: Verify database schema revision
+        working-directory: backend
+        run: python -c "from app.db.schema_compat import assert_schema_current; from app.db.session import engine; assert_schema_current(engine); print('schema current')"
 
       - name: Import FastAPI application
         working-directory: backend
@@ -101,3 +108,57 @@ jobs:
           --namespace rca-agent
           --set image.repository=rca-agent
           --set image.tag=ci
+
+  upgrade-compatibility:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: rca_agent
+          MYSQL_USER: rca_agent
+          MYSQL_PASSWORD: rca_agent_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -uroot -prootpassword"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      DATABASE_URL: mysql+pymysql://rca_agent:rca_agent_password@127.0.0.1:3306/rca_agent?charset=utf8mb4
+      GEMINI_API_KEY: ci-placeholder
+      GEMINI_MODEL: gemini-3.6-flash
+      RCA_MASTER_KEY: ci-placeholder
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Build previous supported schema
+        working-directory: backend
+        run: alembic upgrade c1a2b3c4d5e6
+
+      - name: Verify previous schema is detected as stale
+        working-directory: backend
+        run: >-
+          python -c "from app.db.schema_compat import schema_status; from app.db.session import engine; s=schema_status(engine); print(s); assert not s['up_to_date']"
+
+      - name: Upgrade previous schema to current head
+        working-directory: backend
+        run: alembic upgrade head
+
+      - name: Verify upgraded schema
+        working-directory: backend
+        run: python -c "from app.db.schema_compat import assert_schema_current; from app.db.session import engine; assert_schema_current(engine); print('upgrade path ok')"
