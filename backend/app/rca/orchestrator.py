@@ -4,8 +4,8 @@ from app.applications.context import ApplicationContextService
 from app.applications.runtime import RuntimeConnectionResolver
 from app.db.session import SessionLocal
 from app.integrations.elasticsearch.provider import ElasticsearchLogsProvider
-from app.integrations.gemini.provider import GeminiProvider
 from app.integrations.kubernetes.factory import KubernetesProviderFactory
+from app.integrations.llm.factory import LLMProviderFactory, SUPPORTED_LLM_PROVIDER_TYPES
 from app.integrations.prometheus.provider import PrometheusProvider
 from app.rca.evidence_collector import EvidenceCollector
 from app.rca.evidence_reducer import EvidenceReducer
@@ -17,7 +17,6 @@ class RCAOrchestrator:
     def __init__(self):
         self.scope_resolver = ScopeResolver()
         self.evidence_collector = EvidenceCollector()
-        self.llm = GeminiProvider()
         self._kubernetes_providers: dict[int, object] = {}
 
     @staticmethod
@@ -42,9 +41,33 @@ class RCAOrchestrator:
             "dependency_type": (dependency or {}).get("type"),
         }
 
-    def _analyze(self, query: str, evidence: list[dict], context: dict):
+    @staticmethod
+    def _llm_provider(db: Session, context: dict):
+        application = context["application"]
+        connection_id = application.get("llm_connection_id")
+        model_config = application.get("llm_config") or {}
+
+        if connection_id is None:
+            return LLMProviderFactory.create(None, model_config=model_config)
+
+        runtime = RuntimeConnectionResolver.resolve(db, connection_id)
+        if runtime.get("provider_type") not in SUPPORTED_LLM_PROVIDER_TYPES:
+            raise ValueError(
+                f"Application LLM connection {connection_id} uses unsupported provider "
+                f"{runtime.get('provider_type')}"
+            )
+        return LLMProviderFactory.create(runtime, model_config=model_config)
+
+    @staticmethod
+    def _analyze(llm, query: str, evidence: list[dict], context: dict):
         compact_context = {
-            "application": context["application"],
+            "application": {
+                "id": context["application"]["id"],
+                "name": context["application"]["name"],
+                "slug": context["application"]["slug"],
+                "description": context["application"].get("description"),
+                "investigation_strategy": context["application"]["investigation_strategy"],
+            },
             "enabled_tools": [
                 {
                     "tool_type": item["tool_type"],
@@ -55,7 +78,7 @@ class RCAOrchestrator:
             ],
             "dependencies": context["dependencies"],
         }
-        return self.llm.analyze_rca(
+        return llm.analyze_rca(
             symptom=query,
             evidence=EvidenceReducer.reduce(evidence),
             application_context=compact_context,
@@ -79,7 +102,7 @@ class RCAOrchestrator:
         self._kubernetes_providers[connection_id] = provider
         return provider
 
-    def _resolve_kubernetes_scope(self, db: Session, query: str, context: dict):
+    def _resolve_kubernetes_scope(self, db: Session, query: str, context: dict, llm):
         kubernetes_tool = ApplicationContextService.find_tool(
             context,
             tool_type="kubernetes",
@@ -93,6 +116,7 @@ class RCAOrchestrator:
         scope = self.scope_resolver.resolve(
             text=query,
             kubernetes=provider,
+            llm=llm,
             namespace=namespace,
         )
         return scope, list(scope.candidates)
@@ -275,10 +299,12 @@ class RCAOrchestrator:
                 if not context["tools"]:
                     raise ValueError("Application has no enabled investigation tools")
 
+                llm = self._llm_provider(db, context)
                 scope, candidates = self._resolve_kubernetes_scope(
                     db,
                     investigation.query,
                     context,
+                    llm,
                 )
                 strategy = context["application"]["investigation_strategy"]
                 evidence: list[dict] = []
@@ -310,7 +336,7 @@ class RCAOrchestrator:
                                 )
                             )
 
-                    rca = self._analyze(investigation.query, evidence, context)
+                    rca = self._analyze(llm, investigation.query, evidence, context)
                 else:
                     for tool in context["tools"]:
                         evidence.extend(
@@ -323,7 +349,7 @@ class RCAOrchestrator:
                                 collect_all=False,
                             )
                         )
-                        rca = self._analyze(investigation.query, evidence, context)
+                        rca = self._analyze(llm, investigation.query, evidence, context)
                         if not rca.insufficient_evidence:
                             break
 
@@ -340,7 +366,7 @@ class RCAOrchestrator:
                                         candidates=candidates,
                                     )
                                 )
-                                rca = self._analyze(investigation.query, evidence, context)
+                                rca = self._analyze(llm, investigation.query, evidence, context)
                                 if not rca.insufficient_evidence:
                                     break
                             if rca is not None and not rca.insufficient_evidence:
@@ -355,6 +381,8 @@ class RCAOrchestrator:
                     scope={
                         "application_id": investigation.application_id,
                         "strategy": strategy,
+                        "llm_provider": getattr(llm, "provider_type", type(llm).__name__),
+                        "llm_model": getattr(llm, "model", None),
                         "resolved_scope": scope.model_dump() if scope is not None else None,
                     },
                     evidence=evidence,

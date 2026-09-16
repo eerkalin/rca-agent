@@ -17,6 +17,10 @@ class Application(Base):
     investigation_strategy: Mapped[str] = mapped_column(
         String(50), nullable=False, default="agentic"
     )
+    llm_connection_id: Mapped[int | None] = mapped_column(
+        ForeignKey("connections.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    llm_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(), onupdate=func.now()

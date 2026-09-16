@@ -7,6 +7,8 @@ def test_provider_catalog_matches_runtime_keys():
     prometheus = next(item for item in PROVIDERS if item["provider_type"] == "prometheus")
     elasticsearch = next(item for item in PROVIDERS if item["provider_type"] == "elasticsearch")
     kubernetes = next(item for item in PROVIDERS if item["provider_type"] == "kubernetes")
+    openai = next(item for item in PROVIDERS if item["provider_type"] == "openai")
+    gemini = next(item for item in PROVIDERS if item["provider_type"] == "gemini")
 
     prom_connection_fields = {item["name"] for item in prometheus["connection_fields"]}
     prom_tool_fields = {item["name"] for item in prometheus["tool_fields"]}
@@ -24,6 +26,13 @@ def test_provider_catalog_matches_runtime_keys():
     assert {"kubeconfig"} <= k8s_credential_fields
     assert {"namespace", "tail_lines"} <= k8s_tool_fields
     assert set(next(x for x in kubernetes["connection_fields"] if x["name"] == "mode")["options"]) == {"in_cluster", "kubeconfig"}
+
+    assert openai["category"] == "llm"
+    assert gemini["category"] == "llm"
+    assert {"default_model", "base_url"} <= {x["name"] for x in openai["connection_fields"]}
+    assert {"api_key"} <= {x["name"] for x in openai["credential_fields"]}
+    assert {"model", "temperature", "max_output_tokens"} <= {x["name"] for x in openai["application_fields"]}
+    assert {"api_key"} <= {x["name"] for x in gemini["credential_fields"]}
 
 
 def test_ui_assets_are_bundled():

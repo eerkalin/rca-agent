@@ -9,9 +9,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 class Settings(BaseSettings):
     database_url: str
 
-    # Transitional global LLM configuration. It will move to encrypted Connection
-    # records once multi-LLM support is introduced.
-    gemini_api_key: str
+    # Optional bootstrap fallback for installations created before DB-backed LLM
+    # Connections. New Applications should select an LLM Connection in the UI.
+    gemini_api_key: str | None = None
     gemini_model: str = "gemini-3.6-flash"
 
     # Fernet key used only to encrypt/decrypt connection credentials stored in DB.
