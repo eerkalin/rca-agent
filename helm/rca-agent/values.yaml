@@ -4,7 +4,7 @@ terminationGracePeriodSeconds: 30
 
 image:
   repository: ghcr.io/eerkalin/rca-agent
-  tag: latest
+  tag: main
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -58,11 +58,16 @@ probes:
     timeoutSeconds: 3
     failureThreshold: 3
 
+# By default the chart creates one bootstrap Secret and generates all internal
+# credentials automatically. Set existingSecret only when you intentionally
+# want to manage DATABASE_URL, RCA_MASTER_KEY and MySQL passwords yourself.
 secrets:
-  existingSecret: rca-agent-secrets
+  existingSecret: ""
   keys:
     databaseUrl: database-url
     masterKey: rca-master-key
+    mysqlRootPassword: mysql-root-password
+    mysqlPassword: mysql-password
     legacyGeminiApiKey: gemini-api-key
     legacyGeminiModel: gemini-model
 
@@ -71,10 +76,6 @@ mysql:
   image: mysql:8.4
   database: rca_agent
   user: rca_agent
-  authSecret: rca-agent-secrets
-  authKeys:
-    rootPassword: mysql-root-password
-    password: mysql-password
   persistence:
     enabled: true
     size: 10Gi
