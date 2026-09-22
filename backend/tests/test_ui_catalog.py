@@ -110,10 +110,19 @@ def test_ui_assets_are_cache_busted_and_icons_are_hard_sized():
     index_html = (ui_dir / "index.html").read_text()
     styles = (ui_dir / "styles.css").read_text()
 
-    assert "/ui/styles.css?v=20260922-4" in index_html
-    assert "/ui/app.js?v=20260922-4" in index_html
+    assert "/ui/styles.css?v=20260922-5" in index_html
+    assert "/ui/app.js?v=20260922-5" in index_html
     assert 'width="24" height="24"' in index_html
     assert 'width="17" height="17"' in index_html
     assert "Premium workspace v3" in styles
     assert ".tool-row:hover" in styles
     assert ".rca-grid .card" in styles
+
+
+def test_failed_investigation_has_same_id_retry_control():
+    ui_dir = Path(__file__).resolve().parents[1] / "app" / "ui"
+    source = (ui_dir / "investigations-ui.js").read_text()
+    assert "async function retryInvestigation(id)" in source
+    assert "/investigations/${id}/retry" in source
+    assert "Retry investigation" in source
+    assert "canRunInvestigationActions()" in source
