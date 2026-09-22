@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -32,10 +32,33 @@ class Investigation(Base):
     scope: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     evidence: Mapped[list | None] = mapped_column(JSON, nullable=True)
     rca_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    llm_history_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), index=True
+    )
+
+
+class LLMInteraction(Base):
+    __tablename__ = "llm_interactions"
+    __table_args__ = (
+        UniqueConstraint("investigation_id", "sequence", name="uq_llm_interaction_sequence"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    investigation_id: Mapped[int] = mapped_column(
+        ForeignKey("investigations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    phase: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    provider_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    request_payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    response_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(), index=True
     )
