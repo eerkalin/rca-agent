@@ -7,6 +7,7 @@ let managedUsers = [];
 async function authFetch(path, options={}) {
   const response = await fetch(API + path, {
     credentials: 'same-origin',
+    cache: 'no-store',
     headers: {'Content-Type':'application/json', ...(options.headers||{})},
     ...options,
   });
@@ -94,7 +95,16 @@ function applyRoleControls() {
 
 function resetWorkspaceAfterLogout() {
   managedUsers = [];
+  catalog = [];
+  connections = [];
+  applications = [];
   if (typeof investigations !== 'undefined') investigations = [];
+  document.querySelectorAll('[data-rbac-disabled="role"]').forEach(control => {
+    control.disabled = false;
+    delete control.dataset.rbacDisabled;
+  });
+  document.querySelectorAll('.view').forEach(view => view.classList.add('hidden'));
+  qs('#applications-view')?.classList.remove('hidden');
   document.querySelectorAll(
     '#application-editor,#connection-editor,#user-editor,#investigation-editor,#investigation-detail'
   ).forEach(node => node?.classList.add('hidden'));
@@ -139,7 +149,7 @@ function renderSession() {
 }
 
 async function loadAuthState() {
-  const health = await fetch(`${API}/health`, {credentials:'same-origin'}).then(response => response.json());
+  const health = await fetch(`${API}/health`, {credentials:'same-origin', cache:'no-store'}).then(response => response.json());
   if (!health.auth_enabled) {
     authState = {enabled:false, user:null, role:'admin'};
     hideLogin();
@@ -161,6 +171,8 @@ async function loadAuthState() {
 
 qs('#login-form').onsubmit = async event => {
   event.preventDefault();
+  const submit = qs('#login-form button[type="submit"]');
+  if (submit) { submit.disabled = true; submit.textContent = 'Signing in…'; }
   try {
     await authFetch('/auth/login', {
       method:'POST',
@@ -171,6 +183,8 @@ qs('#login-form').onsubmit = async event => {
   } catch (error) {
     authState = {enabled:true, user:null, role:'readonly'};
     showLogin(error.message);
+  } finally {
+    if (submit) { submit.disabled = false; submit.textContent = 'Sign in'; }
   }
 };
 
