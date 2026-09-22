@@ -9,6 +9,7 @@ import httpx
 from app.observability.logging import elapsed_ms, log_event, sanitize_url
 from app.rca.agentic_models import AgenticDecision
 from app.rca.rca_models import RCAResult
+from app.rca.rca_normalizer import parse_rca_json
 from app.rca.scope_models import ScopeResolution
 
 
@@ -25,6 +26,8 @@ class BaseHTTPLLMProvider:
             raise ValueError("LLM provider requires a model")
         self.temperature = float(self.application_config.get("temperature", self.config.get("temperature", 0.1)))
         self.timeout = float(self.config.get("timeout_seconds", 60))
+        self.retry_attempts = max(1, int(self.config.get("retry_attempts", 4)))
+        self.retry_backoff_seconds = max(0.1, float(self.config.get("retry_backoff_seconds", 1.0)))
         self.usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "available": False}
 
     def _record_usage(self, usage: dict | None) -> None:
@@ -37,6 +40,72 @@ class BaseHTTPLLMProvider:
         self.usage_totals["input_tokens"] += max(0, input_tokens)
         self.usage_totals["output_tokens"] += max(0, output_tokens)
         self.usage_totals["total_tokens"] += max(total_tokens, input_tokens + output_tokens)
+
+    @staticmethod
+    def _retryable_status(status_code: int | None) -> bool:
+        return status_code in {429, 500, 502, 503, 504}
+
+    def _retry_delay(self, attempt: int, response: httpx.Response | None = None) -> float:
+        if response is not None:
+            retry_after = response.headers.get("retry-after")
+            if retry_after:
+                try:
+                    return max(0.1, min(float(retry_after), 30.0))
+                except ValueError:
+                    pass
+        return min(self.retry_backoff_seconds * (2 ** max(0, attempt - 1)), 12.0)
+
+    def _post_json_with_retry(self, endpoint: str, *, headers: dict, body: dict, schema_name: str) -> tuple[httpx.Response, dict]:
+        last_error = None
+        with httpx.Client(timeout=self.timeout, verify=bool(self.config.get("verify_ssl", True))) as client:
+            for attempt in range(1, self.retry_attempts + 1):
+                try:
+                    response = client.post(endpoint, headers=headers, json=body)
+                    if self._retryable_status(response.status_code) and attempt < self.retry_attempts:
+                        delay = self._retry_delay(attempt, response)
+                        log_event(
+                            logger,
+                            logging.WARNING,
+                            "llm.http.retry",
+                            "Transient LLM HTTP response; retrying",
+                            provider=self.config.get("provider_type"),
+                            model=self.model,
+                            status_code=response.status_code,
+                            attempt=attempt,
+                            retry_in_seconds=delay,
+                            schema_name=schema_name,
+                        )
+                        time.sleep(delay)
+                        continue
+                    response.raise_for_status()
+                    return response, response.json()
+                except (httpx.TimeoutException, httpx.TransportError) as exc:
+                    last_error = exc
+                    if attempt >= self.retry_attempts:
+                        raise
+                    delay = self._retry_delay(attempt)
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "llm.http.retry",
+                        "Transient LLM transport error; retrying",
+                        provider=self.config.get("provider_type"),
+                        model=self.model,
+                        attempt=attempt,
+                        retry_in_seconds=delay,
+                        error_type=type(exc).__name__,
+                        schema_name=schema_name,
+                    )
+                    time.sleep(delay)
+                except httpx.HTTPStatusError as exc:
+                    last_error = exc
+                    if not self._retryable_status(exc.response.status_code) or attempt >= self.retry_attempts:
+                        raise
+                    delay = self._retry_delay(attempt, exc.response)
+                    time.sleep(delay)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("LLM request failed without a response")
 
     @staticmethod
     def _rca_prompt(symptom: str, evidence: list[dict], application_context: dict) -> str:
@@ -113,7 +182,49 @@ TECHNICAL INVENTORY:
         started = time.perf_counter()
         log_event(logger, logging.INFO, "llm.rca.start", "LLM RCA analysis started", provider=self.config.get("provider_type"), model=self.model, evidence_items=len(evidence))
         text = self._generate_json(self._rca_prompt(symptom, evidence, application_context), "rca_result")
-        result = RCAResult.model_validate_json(text)
+        try:
+            result = RCAResult.model_validate_json(text)
+        except Exception as first_error:
+            repair_prompt = f"""Your previous RCA JSON did not match the required schema.
+
+ORIGINAL USER SYMPTOM:
+{symptom}
+
+INVALID RCA JSON:
+{text}
+
+VALIDATION ERROR:
+{first_error}
+
+Return a corrected JSON object only. Preserve the factual meaning of the previous answer and supplied evidence. Do not invent new facts.
+Required shape:
+{{
+  "summary": "string",
+  "impact": "string or null",
+  "five_whys": [
+    {{
+      "level": 1,
+      "why": "question the model asks itself",
+      "answer": "evidence-backed answer",
+      "evidence_supported": true,
+      "evidence": [{{"service_name":"...", "evidence_type":"...", "observation":"..."}}]
+    }}
+  ],
+  "root_cause": "string or null",
+  "probable_causes": [{{"cause":"...", "confidence":0.0, "evidence":[]}}],
+  "contributing_factors": ["..."],
+  "recommended_checks": ["..."],
+  "recommended_actions": ["..."],
+  "insufficient_evidence": false,
+  "limitations": ["..."]
+}}
+5 Why is generated by you, the LLM. Ask and answer only as many Why steps as the evidence supports, maximum five.
+"""
+            try:
+                repaired = self._generate_json(repair_prompt, "rca_result_repair")
+                result = RCAResult.model_validate_json(repaired)
+            except Exception:
+                result = parse_rca_json(text)
         log_event(logger, logging.INFO, "llm.rca.success", "LLM RCA analysis completed", provider=self.config.get("provider_type"), model=self.model, elapsed_ms=elapsed_ms(started), insufficient_evidence=result.insufficient_evidence)
         return result
 
@@ -182,11 +293,13 @@ class OpenAICompatibleProvider(BaseHTTPLLMProvider):
         started = time.perf_counter()
         log_event(logger, logging.DEBUG, "llm.http.request", "LLM HTTP request started", provider=self.config.get("provider_type"), model=self.model, method="POST", endpoint=sanitize_url(endpoint), schema_name=schema_name, timeout_seconds=self.timeout)
         try:
-            with httpx.Client(timeout=self.timeout, verify=bool(self.config.get("verify_ssl", True))) as client:
-                response = client.post(endpoint, headers=headers, json=body)
-                status_code = response.status_code
-                response.raise_for_status()
-                payload = response.json()
+            response, payload = self._post_json_with_retry(
+                endpoint,
+                headers=headers,
+                body=body,
+                schema_name=schema_name,
+            )
+            status_code = response.status_code
             self._record_usage(payload.get("usage"))
             log_event(logger, logging.INFO, "llm.http.response", "LLM HTTP request completed", provider=self.config.get("provider_type"), model=self.model, method="POST", endpoint=sanitize_url(endpoint), status_code=status_code, elapsed_ms=elapsed_ms(started), schema_name=schema_name)
             return payload["choices"][0]["message"]["content"]
@@ -211,11 +324,13 @@ class AnthropicProvider(BaseHTTPLLMProvider):
         started = time.perf_counter()
         log_event(logger, logging.DEBUG, "llm.http.request", "Anthropic HTTP request started", provider="anthropic", model=self.model, method="POST", endpoint=sanitize_url(endpoint), schema_name=schema_name, timeout_seconds=self.timeout)
         try:
-            with httpx.Client(timeout=self.timeout, verify=bool(self.config.get("verify_ssl", True))) as client:
-                response = client.post(endpoint, headers=headers, json=body)
-                status_code = response.status_code
-                response.raise_for_status()
-                payload = response.json()
+            response, payload = self._post_json_with_retry(
+                endpoint,
+                headers=headers,
+                body=body,
+                schema_name=schema_name,
+            )
+            status_code = response.status_code
             self._record_usage(payload.get("usage"))
             log_event(logger, logging.INFO, "llm.http.response", "Anthropic HTTP request completed", provider="anthropic", model=self.model, method="POST", endpoint=sanitize_url(endpoint), status_code=status_code, elapsed_ms=elapsed_ms(started), schema_name=schema_name)
         except Exception as exc:
