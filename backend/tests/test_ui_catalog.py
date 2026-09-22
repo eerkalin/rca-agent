@@ -103,3 +103,17 @@ def test_premium_navigation_uses_svg_icons():
     assert 'class="nav-icon" aria-hidden="true"><svg' in index_html
     assert ".nav-icon svg" in styles
     assert "Premium shell v2" in styles
+
+
+def test_ui_assets_are_cache_busted_and_icons_are_hard_sized():
+    ui_dir = Path(__file__).resolve().parents[1] / "app" / "ui"
+    index_html = (ui_dir / "index.html").read_text()
+    styles = (ui_dir / "styles.css").read_text()
+
+    assert "/ui/styles.css?v=20260922-3" in index_html
+    assert "/ui/app.js?v=20260922-3" in index_html
+    assert 'width="24" height="24"' in index_html
+    assert 'width="17" height="17"' in index_html
+    assert "Premium workspace v3" in styles
+    assert ".tool-row:hover" in styles
+    assert ".rca-grid .card" in styles
