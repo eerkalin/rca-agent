@@ -146,7 +146,7 @@ STRICT RULES:
 4. Distinguish observations, hypotheses, root cause and contributing factors.
 5. A healthy infrastructure object does not prove a healthy business transaction.
 6. A warning or correlation is not automatically causation.
-7. Build a 5 Why chain only as far as evidence supports it. Do NOT fabricate five levels merely to reach five.
+7. You, the LLM, formulate both each Why question and its evidence-backed answer. RCA Agent never writes the 5 Why chain for you. Build only as far as evidence supports it; do NOT fabricate five levels merely to reach five.
 8. For every 5 Why step set evidence_supported accurately and attach evidence when available.
 9. If the next Why cannot be established from available evidence, stop the chain and explain the limitation.
 10. If root cause cannot be proven, set root_cause to null and insufficient_evidence=true.
@@ -203,7 +203,9 @@ RULES:
 6. Do not repeat the same tool with the same arguments.
 7. If evidence is sufficient to answer the symptom, set stop=true.
 8. If there is no evidence yet, do not stop unless the question is answerable from Application context alone.
-9. For Kubernetes readiness/health questions, first inspect namespace health. If a problematic pod is found, pod diagnostics can then retrieve its events/logs.
+9. Tool descriptions may contain investigation recommendations (for example, namespace health before pod diagnostics). Treat them as guidance, not a hard-coded workflow: choose the observations that best answer the user's question.
+10. When multiple independent observations are useful, you may return several choices in one round with parallel=true.
+11. Set stop=true only when the evidence is sufficient for a final answer or no permitted tool can materially improve it.
 """
         started = time.perf_counter()
         log_event(logger, logging.INFO, "gemini.agentic.plan.start", "Gemini agentic planning started", model=self.model, tools=len(available_tools), evidence_items=len(evidence))
