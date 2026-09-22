@@ -75,6 +75,7 @@ STRICT RULES:
 11. Dependencies listed in APPLICATION CONTEXT are diagnostic context only; do not claim they failed unless evidence supports it.
 12. Keep evidence references concise. Do not reproduce large raw logs.
 13. Recommended checks and actions must be safe, advisory, and read-only from the agent perspective.
+14. Return every RCA schema key. Use [] for list sections that are not applicable. Never omit probable_causes, recommended_checks, recommended_actions, limitations, five_whys or contributing_factors.
 
 Return a concise technical RCA suitable for incident engineers.
 """

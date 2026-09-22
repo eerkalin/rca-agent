@@ -67,6 +67,10 @@ async def request_logging_middleware(request: Request, call_next):
         logger.exception("Unhandled HTTP request error")
         raise
     response.headers["x-request-id"] = request_id
+    if path.startswith("/ui"):
+        # The UI is shipped with the backend image. Revalidate static assets so a
+        # browser cannot combine a newly deployed index.html with stale CSS/JS.
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
     if not is_health:
         level = logging.INFO if response.status_code < 400 else logging.WARNING
         log_event(
