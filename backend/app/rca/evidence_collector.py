@@ -60,6 +60,82 @@ class EvidenceCollector:
             "pods": pod_evidence,
         }
 
+    def collect_pod_diagnostics(
+        self,
+        kubernetes: KubernetesProvider,
+        namespace: str,
+        pod_name: str,
+        tail_lines: int = 100,
+    ) -> dict:
+        """Collect bounded read-only diagnostics for one exact pod name."""
+        ToolPolicy.assert_allowed("kubernetes", "list_pods")
+        pods = kubernetes.list_pods_for_selector(namespace=namespace, selector={})
+        pod = next((item for item in pods if item.get("name") == pod_name), None)
+        if pod is None:
+            return {
+                "scope": "pod_diagnostics",
+                "namespace": namespace,
+                "pod_name": pod_name,
+                "found": False,
+            }
+
+        logs = {}
+        for container in pod.get("containers", []):
+            container_name = container.get("name")
+            if not container_name:
+                continue
+            try:
+                ToolPolicy.assert_allowed("kubernetes", "get_logs")
+                current_logs = kubernetes.get_pod_logs(
+                    namespace=namespace,
+                    pod_name=pod_name,
+                    container=container_name,
+                    tail_lines=tail_lines,
+                )
+            except Exception as exc:
+                current_logs = f"Unable to read logs: {exc}"
+
+            previous_logs = None
+            if int(container.get("restart_count") or 0) > 0:
+                try:
+                    ToolPolicy.assert_allowed("kubernetes", "get_logs")
+                    previous_logs = kubernetes.get_pod_logs(
+                        namespace=namespace,
+                        pod_name=pod_name,
+                        container=container_name,
+                        tail_lines=tail_lines,
+                        previous=True,
+                    )
+                except Exception:
+                    previous_logs = None
+            logs[container_name] = {
+                "current": current_logs,
+                "previous": previous_logs,
+            }
+
+        try:
+            ToolPolicy.assert_allowed("kubernetes", "get_events")
+            events = kubernetes.get_events_for_resource(
+                namespace=namespace,
+                resource_name=pod_name,
+            )
+        except Exception as exc:
+            events = []
+            events_error = str(exc)
+        else:
+            events_error = None
+
+        return {
+            "scope": "pod_diagnostics",
+            "namespace": namespace,
+            "pod_name": pod_name,
+            "found": True,
+            "pod": pod,
+            "events": events,
+            "events_error": events_error,
+            "logs": logs,
+        }
+
     def collect_namespace_health(
         self,
         kubernetes: KubernetesProvider,
