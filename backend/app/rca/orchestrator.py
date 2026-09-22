@@ -615,7 +615,7 @@ class RCAOrchestrator:
                 evidence=reduced,
                 executed_tool_keys=executed_signatures,
             )
-            decisions.append({"round": round_number, **decision.model_dump()})
+            decisions.append({"round": round_number, **decision.model_dump(exclude_none=True)})
 
             if decision.stop:
                 if evidence:
@@ -643,7 +643,8 @@ class RCAOrchestrator:
                     )
                     continue
 
-                signature = self._choice_signature(choice.tool_key, choice.arguments)
+                arguments = choice.arguments_dict()
+                signature = self._choice_signature(choice.tool_key, arguments)
                 if signature in executed_signatures:
                     continue
 
@@ -653,7 +654,7 @@ class RCAOrchestrator:
                         db,
                         tool=tool,
                         dependency=dependency,
-                        arguments=choice.arguments,
+                        arguments=arguments,
                         query=investigation.query,
                         context=context,
                     )
@@ -661,7 +662,7 @@ class RCAOrchestrator:
                     observations = [{
                         "tool": self._tool_descriptor(tool),
                         "dependency": dependency,
-                        "agentic_arguments": choice.arguments,
+                        "agentic_arguments": arguments,
                         "error": str(exc),
                     }]
                 evidence.extend(observations)
