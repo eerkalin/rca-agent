@@ -106,8 +106,7 @@ def test_agentic_prompt_includes_application_context_dependencies_and_autonomous
             "operations": [{"name": "namespace_health"}],
             "read_only": True,
         }],
-        evidence=[],
-        executed_tool_keys=[],
+        investigation_transcript="ROUND 1 TOOL REQUEST\ntool_key: application:1\n\nROUND 1 TOOL RESPONSE\n{\"problem_pods_count\": 1}",
     )
 
     assert "autonomous Site Reliability / Application Support investigation agent" in prompt
@@ -117,5 +116,9 @@ def test_agentic_prompt_includes_application_context_dependencies_and_autonomous
     assert "Stores payment and checkout state" in prompt
     assert "Checkout latency increased" in prompt
     assert "namespace_health" in prompt
+    assert "INVESTIGATION TRANSCRIPT" in prompt
+    assert "ROUND 1 TOOL REQUEST" in prompt
+    assert "problem_pods_count" in prompt
+    assert "Return exactly one JSON object and nothing else" in prompt
     assert "guidance, not a hard-coded workflow" in prompt
     assert "must-not-leak" not in prompt
