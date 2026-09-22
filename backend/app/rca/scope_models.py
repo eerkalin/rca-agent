@@ -22,10 +22,10 @@ class ScopeCandidate(BaseModel):
 
 
 class ScopeResolution(BaseModel):
-    candidates: list[ScopeCandidate]
+    candidates: list[ScopeCandidate] = Field(default_factory=list)
 
     unresolved: bool = Field(
         description="True if there is insufficient evidence to identify a useful candidate"
     )
 
-    explanation: str
+    explanation: str = Field(default="Scope could not be resolved to a specific service")
