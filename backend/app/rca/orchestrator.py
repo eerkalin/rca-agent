@@ -20,6 +20,7 @@ from app.rca.evidence_collector import EvidenceCollector
 from app.rca.evidence_reducer import EvidenceReducer
 from app.rca.repository import InvestigationRepository
 from app.rca.scope_resolver import ScopeResolver
+from app.rca.tool_policy import ToolPolicy
 
 
 logger = logging.getLogger(__name__)
