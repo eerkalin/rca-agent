@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.db.models.investigation import Investigation, LLMInteraction
@@ -89,6 +89,29 @@ class InvestigationRepository:
     @staticmethod
     def get_by_id(db: Session, investigation_id: int) -> Investigation | None:
         return db.get(Investigation, investigation_id)
+
+    @staticmethod
+    def reset_for_retry(db: Session, investigation: Investigation) -> None:
+        investigation.status = "queued"
+        investigation.scope = None
+        investigation.evidence = None
+        investigation.rca_result = None
+        investigation.error = None
+        investigation.started_at = None
+        investigation.finished_at = None
+        investigation.llm_provider_type = None
+        investigation.llm_model = None
+        investigation.llm_input_tokens = 0
+        investigation.llm_output_tokens = 0
+        investigation.llm_total_tokens = 0
+        investigation.llm_token_usage_available = False
+        db.execute(
+            delete(LLMInteraction).where(
+                LLMInteraction.investigation_id == investigation.id
+            )
+        )
+        db.commit()
+        db.refresh(investigation)
 
     @staticmethod
     def update_llm_usage(
