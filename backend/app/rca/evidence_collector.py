@@ -79,16 +79,63 @@ class EvidenceCollector:
                     (item for item in pod.get("conditions", []) if item.get("type") == "Ready"),
                     None,
                 )
-                ready = bool(
+                desired_count = int(
+                    pod.get("desired_container_count")
+                    or len(pod.get("desired_containers", []))
+                    or len(pod.get("containers", []))
+                )
+                status_count = int(
+                    pod.get("status_container_count")
+                    if pod.get("status_container_count") is not None
+                    else len(pod.get("containers", []))
+                )
+                ready_count = int(
+                    pod.get("ready_container_count")
+                    if pod.get("ready_container_count") is not None
+                    else sum(1 for container in pod.get("containers", []) if container.get("ready"))
+                )
+                condition_ready = bool(
                     ready_condition
                     and str(ready_condition.get("status")).lower() == "true"
+                )
+                containers_ready = bool(
+                    desired_count > 0
+                    and status_count >= desired_count
+                    and ready_count == desired_count
+                )
+                ready = bool(
+                    condition_ready
                     and pod.get("phase") == "Running"
-                    and all(container.get("ready") for container in pod.get("containers", []))
+                    and containers_ready
+                    and not pod.get("deletion_timestamp")
                 )
                 if ready:
                     continue
 
                 item = dict(pod)
+                item["health_reasons"] = []
+                if not condition_ready:
+                    item["health_reasons"].append("Pod Ready condition is not True")
+                if pod.get("phase") != "Running":
+                    item["health_reasons"].append(f"Pod phase is {pod.get('phase')}")
+                if status_count < desired_count:
+                    item["health_reasons"].append(
+                        f"Container status missing: {status_count}/{desired_count}"
+                    )
+                if ready_count != desired_count:
+                    item["health_reasons"].append(
+                        f"Ready containers: {ready_count}/{desired_count}"
+                    )
+                for container in pod.get("containers", []):
+                    if not container.get("ready"):
+                        state = container.get("state") or "unknown"
+                        reason = container.get("reason") or container.get("last_reason")
+                        detail = f"{container.get('name')}: {state}"
+                        if reason:
+                            detail += f" ({reason})"
+                        item["health_reasons"].append(detail)
+                if pod.get("deletion_timestamp"):
+                    item["health_reasons"].append("Pod is terminating")
                 try:
                     item["events"] = kubernetes.get_events_for_resource(
                         namespace=namespace,
