@@ -40,6 +40,18 @@ function roleLabel(role) {
   return role === 'admin' ? 'Admin' : role === 'investigator' ? 'Investigator' : 'Read-only';
 }
 
+function setRoleDisabled(control, shouldDisable) {
+  if (shouldDisable) {
+    if (!control.disabled) control.dataset.rbacDisabled = 'role';
+    control.disabled = true;
+    return;
+  }
+  if (control.dataset.rbacDisabled === 'role') {
+    control.disabled = false;
+    delete control.dataset.rbacDisabled;
+  }
+}
+
 function applyRoleControls() {
   const role = authState.role || 'readonly';
   document.body.dataset.role = role;
@@ -51,22 +63,66 @@ function applyRoleControls() {
   qs('#new-investigation')?.classList.toggle('hidden', !(admin || investigator));
   qs('#users-nav')?.classList.toggle('hidden', !admin || !authState.enabled);
 
-  document.querySelectorAll('#applications-view button.danger,#connections-view button.danger').forEach(button => button.classList.toggle('hidden', !admin));
-  document.querySelectorAll('#applications-view .primary,#connections-view .primary').forEach(button => button.classList.toggle('hidden', !admin));
+  document.querySelectorAll('#applications-view button.danger,#connections-view button.danger')
+    .forEach(button => button.classList.toggle('hidden', !admin));
+  document.querySelectorAll('#applications-view .primary,#connections-view .primary')
+    .forEach(button => button.classList.toggle('hidden', !admin));
+
   document.querySelectorAll('#applications-view button').forEach(button => {
     const text = button.textContent.trim().toLowerCase();
-    if (!admin && ['add tool','add dependency','save application','save llm settings','save tool','save dependency','save'].includes(text)) button.classList.add('hidden');
+    const adminOnly = ['add tool','add dependency','save application','save llm settings','save tool','save dependency','save'].includes(text);
+    if (adminOnly) button.classList.toggle('hidden', !admin);
   });
+
   document.querySelectorAll('#connections-view button').forEach(button => {
     const onclick = button.getAttribute('onclick') || '';
     const text = button.textContent.trim().toLowerCase();
-    if (!admin && ['save','delete'].some(word => text.includes(word))) button.classList.add('hidden');
-    if (!admin && !investigator && onclick.includes('testConnection')) button.classList.add('hidden');
+    const adminOnly = ['save','delete'].some(word => text.includes(word));
+    if (adminOnly) button.classList.toggle('hidden', !admin);
+    if (onclick.includes('testConnection')) button.classList.toggle('hidden', !(admin || investigator));
   });
 
-  // Existing detail forms are readable to non-admin roles, but not editable.
-  if (!admin) {
-    document.querySelectorAll('#application-editor input,#application-editor select,#application-editor textarea,#connection-editor input,#connection-editor select,#connection-editor textarea').forEach(control => control.disabled = true);
+  // Role-based disabling must be reversible when another user signs in without
+  // reloading the page. Preserve controls that were already disabled for a
+  // functional reason (for example immutable provider type on an existing
+  // Connection).
+  document.querySelectorAll(
+    '#application-editor input,#application-editor select,#application-editor textarea,' +
+    '#connection-editor input,#connection-editor select,#connection-editor textarea'
+  ).forEach(control => setRoleDisabled(control, !admin));
+}
+
+function resetWorkspaceAfterLogout() {
+  managedUsers = [];
+  if (typeof investigations !== 'undefined') investigations = [];
+  document.querySelectorAll(
+    '#application-editor,#connection-editor,#user-editor,#investigation-editor,#investigation-detail'
+  ).forEach(node => node?.classList.add('hidden'));
+  qs('#login-password').value = '';
+  qs('#login-error').textContent = '';
+  qs('#login-error').classList.add('hidden');
+}
+
+async function establishAuthenticatedSession() {
+  // Verify that the HttpOnly session cookie from /login is active before
+  // rehydrating the workspace. This avoids carrying stale role/UI state across
+  // logout -> login transitions.
+  const current = await authFetch('/auth/me');
+  authState = {
+    enabled: true,
+    user: current.user,
+    role: current.effective_role,
+  };
+  hideLogin();
+  renderSession();
+  await refresh();
+  applyRoleControls();
+
+  if (!qs('#investigations-view')?.classList.contains('hidden') && typeof loadInvestigations === 'function') {
+    await loadInvestigations();
+  }
+  if (!qs('#users-view')?.classList.contains('hidden') && authState.role === 'admin') {
+    await loadUsers();
   }
 }
 
@@ -106,17 +162,14 @@ async function loadAuthState() {
 qs('#login-form').onsubmit = async event => {
   event.preventDefault();
   try {
-    const result = await authFetch('/auth/login', {
+    await authFetch('/auth/login', {
       method:'POST',
       body:JSON.stringify({username:qs('#login-username').value.trim(), password:qs('#login-password').value}),
     });
-    authState = {enabled:true, user:result.user, role:result.user.role};
     qs('#login-password').value = '';
-    hideLogin();
-    renderSession();
-    await refresh();
-    applyRoleControls();
+    await establishAuthenticatedSession();
   } catch (error) {
+    authState = {enabled:true, user:null, role:'readonly'};
     showLogin(error.message);
   }
 };
@@ -124,6 +177,8 @@ qs('#login-form').onsubmit = async event => {
 qs('#logout-button').onclick = async () => {
   try { await authFetch('/auth/logout', {method:'POST'}); } catch (_) {}
   authState = {enabled:true, user:null, role:'readonly'};
+  resetWorkspaceAfterLogout();
+  renderSession();
   showLogin();
 };
 
