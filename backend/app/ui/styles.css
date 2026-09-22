@@ -899,3 +899,33 @@ input:focus,select:focus,textarea:focus{box-shadow:0 0 0 4px rgba(10,132,255,.09
   .application-tabs{position:static;padding:8px 12px}
   .tile-grid{grid-template-columns:1fr}
 }
+
+
+/* Inner live-tiles: configuration sections read as product surfaces, not raw forms. */
+.application-tab-panel>.grid,
+.connection-detail>.grid,
+.connection-detail>#conn-provider-fields,
+.connection-detail>#conn-secrets,
+#user-editor>.grid,
+#investigation-editor>.grid{
+  padding:20px;
+  border:1px solid rgba(216,225,238,.86);
+  border-radius:19px;
+  background:
+    radial-gradient(circle at 100% 0%,rgba(10,132,255,.045),transparent 34%),
+    linear-gradient(145deg,rgba(250,252,255,.92),rgba(246,249,253,.78));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.9);
+}
+.connection-detail>#conn-provider-fields,
+.connection-detail>#conn-secrets{margin-top:18px}
+.connection-detail>#conn-secrets{background:linear-gradient(145deg,rgba(250,249,255,.94),rgba(246,247,253,.82))}
+.application-tab-panel>.actions,
+.connection-detail>.actions,
+#user-editor>.actions,
+#investigation-editor>.actions{
+  padding-top:2px;
+}
+.application-tab-panel .empty-state{margin-top:8px}
+.rca-grid .card:nth-child(2){background:linear-gradient(145deg,#fbfcff,#f5f8ff)}
+.rca-grid .card:nth-child(3){background:linear-gradient(145deg,#f7fbff,#f1f8ff)}
+.rca-grid .card:nth-child(4){background:linear-gradient(145deg,#f8fff9,#f2faf5)}
