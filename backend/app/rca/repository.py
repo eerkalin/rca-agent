@@ -51,9 +51,19 @@ class InvestigationRepository:
         db.commit()
 
     @staticmethod
-    def mark_failed(db: Session, investigation: Investigation, error: str) -> None:
+    def mark_failed(
+        db: Session,
+        investigation: Investigation,
+        error: str,
+        scope: dict | None = None,
+        evidence: list | None = None,
+    ) -> None:
         investigation.status = "failed"
         investigation.error = error
+        if scope is not None:
+            investigation.scope = scope
+        if evidence is not None:
+            investigation.evidence = evidence
         investigation.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
         db.commit()
 
