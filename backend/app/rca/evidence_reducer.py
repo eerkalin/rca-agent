@@ -32,6 +32,34 @@ class EvidenceReducer:
     @classmethod
     def _reduce_kubernetes(cls, item: dict) -> dict:
         kubernetes = item.get("kubernetes", {})
+
+        if kubernetes.get("scope") == "namespace_health":
+            namespaces = []
+            for namespace in kubernetes.get("namespaces", []):
+                problem_pods = []
+                for pod in namespace.get("problem_pods", []):
+                    problem_pods.append({
+                        "name": pod.get("name"),
+                        "phase": pod.get("phase"),
+                        "node_name": pod.get("node_name"),
+                        "conditions": pod.get("conditions", []),
+                        "containers": pod.get("containers", []),
+                        "events": pod.get("events", [])[-cls.MAX_EVENTS_PER_POD :],
+                    })
+                namespaces.append({
+                    "namespace": namespace.get("namespace"),
+                    "total_pods": namespace.get("total_pods", 0),
+                    "problem_pods_count": namespace.get("problem_pods_count", len(problem_pods)),
+                    "problem_pods": problem_pods,
+                    "truncated": bool(namespace.get("truncated", False)),
+                })
+            return {
+                "scope": "namespace_health",
+                "total_pods": kubernetes.get("total_pods", 0),
+                "problem_pods_count": kubernetes.get("problem_pods_count", 0),
+                "namespaces": namespaces,
+            }
+
         pods = []
         for pod in kubernetes.get("pods", []):
             logs = {}
