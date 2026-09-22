@@ -29,6 +29,7 @@ def upgrade() -> None:
     op.add_column("investigations", sa.Column("llm_input_tokens", sa.Integer(), nullable=False, server_default="0"))
     op.add_column("investigations", sa.Column("llm_output_tokens", sa.Integer(), nullable=False, server_default="0"))
     op.add_column("investigations", sa.Column("llm_total_tokens", sa.Integer(), nullable=False, server_default="0"))
+    op.add_column("investigations", sa.Column("llm_token_usage_available", sa.Boolean(), nullable=False, server_default=sa.false()))
     op.create_table(
         "llm_interactions",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -43,6 +44,7 @@ def upgrade() -> None:
         sa.Column("input_tokens", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("output_tokens", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("total_tokens", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("token_usage_available", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("duration_ms", sa.Integer(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
         sa.ForeignKeyConstraint(["investigation_id"], ["investigations.id"], ondelete="CASCADE"),
@@ -59,6 +61,7 @@ def downgrade() -> None:
     op.drop_index("ix_llm_interactions_phase", table_name="llm_interactions")
     op.drop_index("ix_llm_interactions_investigation_id", table_name="llm_interactions")
     op.drop_table("llm_interactions")
+    op.drop_column("investigations", "llm_token_usage_available")
     op.drop_column("investigations", "llm_total_tokens")
     op.drop_column("investigations", "llm_output_tokens")
     op.drop_column("investigations", "llm_input_tokens")
