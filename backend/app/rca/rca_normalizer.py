@@ -153,10 +153,11 @@ def normalize_rca_payload(payload: dict) -> dict:
 
 def parse_rca_json(text: str) -> RCAResult:
     cleaned = (text or "").strip()
-    if cleaned.startswith("~~~json"):
-        cleaned = cleaned.removeprefix("~~~json").removesuffix("~~~").strip()
-    elif cleaned.startswith("~~~"):
-        cleaned = cleaned.removeprefix("~~~").removesuffix("~~~").strip()
+    fence = chr(96) * 3
+    if cleaned.startswith(fence + "json"):
+        cleaned = cleaned.removeprefix(fence + "json").removesuffix(fence).strip()
+    elif cleaned.startswith(fence):
+        cleaned = cleaned.removeprefix(fence).removesuffix(fence).strip()
     payload = json.loads(cleaned)
     if not isinstance(payload, dict):
         raise ValueError("RCA response must be a JSON object")
