@@ -8,6 +8,7 @@ import httpx
 
 from app.observability.logging import elapsed_ms, log_event, sanitize_url
 from app.rca.agentic_models import AgenticDecision
+from app.rca.agentic_prompt import build_agentic_planner_prompt
 from app.rca.rca_models import RCAResult
 from app.rca.rca_normalizer import parse_rca_json
 from app.rca.scope_models import ScopeResolution
@@ -231,38 +232,19 @@ Required shape:
     def plan_next_tools(
         self,
         *,
+        application_context: dict,
         symptom: str,
         available_tools: list[dict],
         evidence: list[dict],
         executed_tool_keys: list[str],
     ) -> AgenticDecision:
-        prompt = f"""You are the planning loop of a READ-ONLY RCA agent.
-
-USER SYMPTOM:
-{symptom}
-
-AVAILABLE TOOLS:
-{json.dumps(available_tools, ensure_ascii=False, default=str)}
-
-EVIDENCE COLLECTED SO FAR:
-{json.dumps(evidence, ensure_ascii=False, default=str)}
-
-ALREADY EXECUTED TOOL SIGNATURES:
-{json.dumps(executed_tool_keys, ensure_ascii=False)}
-
-RULES:
-1. Choose only exact tool_key values from AVAILABLE TOOLS.
-2. Never invent tools or mutating actions.
-3. Arguments must obey the selected tool descriptor.
-4. Prefer the smallest set of high-value observations.
-5. You may choose multiple independent tools in the same round and set parallel=true.
-6. Do not repeat the same tool with the same arguments.
-7. If evidence is sufficient to answer the symptom, set stop=true.
-8. If no evidence has been collected, do not stop unless Application context alone answers the question.
-9. Tool descriptions may contain investigation recommendations (for example, namespace health before pod diagnostics). Treat them as guidance, not a hard-coded workflow: choose the observations that best answer the user's question.
-10. When multiple independent observations are useful, you may return several choices in one round with parallel=true.
-11. Set stop=true only when the evidence is sufficient for a final answer or no permitted tool can materially improve it.
-Return JSON only, matching the agentic decision schema."""
+        prompt = build_agentic_planner_prompt(
+            application_context=application_context,
+            symptom=symptom,
+            available_tools=available_tools,
+            evidence=evidence,
+            executed_tool_keys=executed_tool_keys,
+        )
         text = self._generate_json(prompt, "agentic_decision")
         return AgenticDecision.model_validate_json(text)
 

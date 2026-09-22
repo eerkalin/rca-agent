@@ -37,6 +37,82 @@ class RCAOrchestrator:
         return {"id": tool.get("id"), "tool_type": tool.get("tool_type"), "provider_type": tool.get("provider_type"), "connection_id": tool.get("connection_id")}
 
     @staticmethod
+    def _safe_tool_context(tool: dict) -> dict:
+        config = tool.get("config") or {}
+        result = {
+            "id": tool.get("id"),
+            "tool_type": tool.get("tool_type"),
+            "provider_type": tool.get("provider_type"),
+        }
+        if tool.get("priority") is not None:
+            result["priority"] = tool.get("priority")
+
+        if tool.get("tool_type") == "kubernetes" and tool.get("provider_type") == "kubernetes":
+            namespaces = [str(item).strip() for item in (config.get("namespaces") or []) if str(item).strip()]
+            if not namespaces and config.get("namespace"):
+                namespaces = [str(config.get("namespace")).strip()]
+            result["configured_scope"] = {
+                "namespaces": namespaces,
+                "tail_lines": config.get("tail_lines", 50),
+            }
+        elif tool.get("tool_type") == "metrics" and tool.get("provider_type") == "prometheus":
+            query_names = []
+            for item in config.get("queries") or []:
+                if isinstance(item, dict) and item.get("name"):
+                    query_names.append(str(item["name"]))
+            result["configured_scope"] = {
+                "preconfigured_query_names": query_names,
+                "dynamic_promql_allowed": True,
+            }
+        elif tool.get("tool_type") == "logs" and tool.get("provider_type") in {"elasticsearch", "elastic"}:
+            result["configured_scope"] = {
+                "index_pattern": config.get("index_pattern"),
+                "time_field": config.get("time_field", "@timestamp"),
+                "service_field": config.get("service_field"),
+                "namespace_field": config.get("namespace_field"),
+                "lookback_minutes": config.get("lookback_minutes"),
+            }
+        elif tool.get("tool_type") == "traces" and tool.get("provider_type") == "elastic_apm":
+            result["configured_scope"] = {
+                "index_pattern": config.get("index_pattern"),
+                "service_field": config.get("service_field"),
+                "namespace_field": config.get("namespace_field"),
+                "lookback_minutes": config.get("lookback_minutes"),
+            }
+        return result
+
+    @classmethod
+    def _llm_application_context(cls, context: dict) -> dict:
+        application = context["application"]
+        dependencies = []
+        for dependency in context.get("dependencies", []):
+            dependencies.append({
+                "id": dependency.get("id"),
+                "name": dependency.get("name"),
+                "type": dependency.get("type"),
+                "description": dependency.get("description"),
+                "diagnostic_bindings": [
+                    cls._safe_tool_context(tool)
+                    for tool in dependency.get("tools", [])
+                ],
+            })
+
+        return {
+            "application": {
+                "id": application.get("id"),
+                "name": application.get("name"),
+                "slug": application.get("slug"),
+                "description": application.get("description"),
+                "investigation_strategy": application.get("investigation_strategy"),
+            },
+            "enabled_diagnostic_bindings": [
+                cls._safe_tool_context(tool)
+                for tool in context.get("tools", [])
+            ],
+            "dependencies": dependencies,
+        }
+
+    @staticmethod
     def _variables(context: dict, candidate=None, dependency: dict | None = None) -> dict:
         application = context["application"]
         return {
@@ -74,11 +150,7 @@ class RCAOrchestrator:
     @staticmethod
     def _analyze(query: str, evidence: list[dict], context: dict, llm):
         reduced = EvidenceReducer.reduce(evidence)
-        compact_context = {
-            "application": {key: value for key, value in context["application"].items() if key not in {"llm_connection_id", "llm_config"}},
-            "enabled_tools": [{"tool_type": item["tool_type"], "provider_type": item["provider_type"], "config": item["config"]} for item in context["tools"]],
-            "dependencies": context["dependencies"],
-        }
+        compact_context = RCAOrchestrator._llm_application_context(context)
         log_event(logger, logging.INFO, "rca.analysis.start", "Starting LLM RCA analysis", evidence_items=len(evidence), reduced_evidence_items=len(reduced))
         started = time.perf_counter()
         result = llm.analyze_rca(symptom=query, evidence=reduced, application_context=compact_context)
@@ -531,11 +603,13 @@ class RCAOrchestrator:
         evidence: list[dict] = []
         executed_signatures: list[str] = []
         decisions: list[dict] = []
+        planner_context = self._llm_application_context(context)
         max_rounds = 6
 
         for round_number in range(1, max_rounds + 1):
             reduced = EvidenceReducer.reduce(evidence)
             decision = llm.plan_next_tools(
+                application_context=planner_context,
                 symptom=investigation.query,
                 available_tools=catalog,
                 evidence=reduced,

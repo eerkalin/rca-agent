@@ -8,6 +8,7 @@ from google.genai import types
 from app.config import settings
 from app.observability.logging import elapsed_ms, log_event
 from app.rca.agentic_models import AgenticDecision
+from app.rca.agentic_prompt import build_agentic_planner_prompt
 from app.rca.rca_models import RCAResult
 from app.rca.scope_models import ScopeResolution
 
@@ -174,48 +175,46 @@ Return a concise technical RCA suitable for incident engineers.
     def plan_next_tools(
         self,
         *,
+        application_context: dict,
         symptom: str,
         available_tools: list[dict],
         evidence: list[dict],
         executed_tool_keys: list[str],
     ) -> AgenticDecision:
-        prompt = f"""
-You are the planning loop of a READ-ONLY RCA agent.
-
-USER SYMPTOM:
-{symptom}
-
-AVAILABLE TOOLS:
-{json.dumps(available_tools, ensure_ascii=False, default=str)}
-
-EVIDENCE COLLECTED SO FAR:
-{json.dumps(evidence, ensure_ascii=False, default=str)}
-
-ALREADY EXECUTED TOOL SIGNATURES:
-{json.dumps(executed_tool_keys, ensure_ascii=False)}
-
-RULES:
-1. Choose only exact tool_key values from AVAILABLE TOOLS.
-2. Never invent tools or mutating actions.
-3. Prefer the smallest set of high-value observations that can answer the question.
-4. You may select multiple independent tools in one round and set parallel=true.
-5. Use arguments only when described by the selected tool.
-6. Do not repeat the same tool with the same arguments.
-7. If evidence is sufficient to answer the symptom, set stop=true.
-8. If there is no evidence yet, do not stop unless the question is answerable from Application context alone.
-9. Tool descriptions may contain investigation recommendations (for example, namespace health before pod diagnostics). Treat them as guidance, not a hard-coded workflow: choose the observations that best answer the user's question.
-10. When multiple independent observations are useful, you may return several choices in one round with parallel=true.
-11. Set stop=true only when the evidence is sufficient for a final answer or no permitted tool can materially improve it.
-"""
+        prompt = build_agentic_planner_prompt(
+            application_context=application_context,
+            symptom=symptom,
+            available_tools=available_tools,
+            evidence=evidence,
+            executed_tool_keys=executed_tool_keys,
+        )
         started = time.perf_counter()
-        log_event(logger, logging.INFO, "gemini.agentic.plan.start", "Gemini agentic planning started", model=self.model, tools=len(available_tools), evidence_items=len(evidence))
+        log_event(
+            logger,
+            logging.INFO,
+            "gemini.agentic.plan.start",
+            "Gemini agentic planning started",
+            model=self.model,
+            tools=len(available_tools),
+            evidence_items=len(evidence),
+            dependencies=len(application_context.get("dependencies", [])),
+        )
         response = self._generate_with_retry(
             contents=prompt,
             config=self._config(AgenticDecision),
         )
         self._record_usage(response)
         result = AgenticDecision.model_validate_json(response.text)
-        log_event(logger, logging.INFO, "gemini.agentic.plan.success", "Gemini agentic planning completed", model=self.model, elapsed_ms=elapsed_ms(started), stop=result.stop, choices=len(result.choices))
+        log_event(
+            logger,
+            logging.INFO,
+            "gemini.agentic.plan.success",
+            "Gemini agentic planning completed",
+            model=self.model,
+            elapsed_ms=elapsed_ms(started),
+            stop=result.stop,
+            choices=len(result.choices),
+        )
         return result
 
     def resolve_scope(self, alert_text: str, technical_services: list[dict]) -> ScopeResolution:
