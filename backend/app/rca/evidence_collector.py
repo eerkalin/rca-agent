@@ -60,6 +60,64 @@ class EvidenceCollector:
             "pods": pod_evidence,
         }
 
+    def collect_namespace_health(
+        self,
+        kubernetes: KubernetesProvider,
+        namespaces: list[str],
+        max_problem_pods: int = 50,
+    ) -> dict:
+        ToolPolicy.assert_allowed("kubernetes", "list_pods")
+        ToolPolicy.assert_allowed("kubernetes", "get_events")
+
+        summaries = []
+        for namespace in namespaces:
+            pods = kubernetes.list_pods_for_selector(namespace=namespace, selector={})
+            problem_pods = []
+
+            for pod in pods:
+                ready_condition = next(
+                    (item for item in pod.get("conditions", []) if item.get("type") == "Ready"),
+                    None,
+                )
+                ready = bool(
+                    ready_condition
+                    and str(ready_condition.get("status")).lower() == "true"
+                    and pod.get("phase") == "Running"
+                    and all(container.get("ready") for container in pod.get("containers", []))
+                )
+                if ready:
+                    continue
+
+                item = dict(pod)
+                try:
+                    item["events"] = kubernetes.get_events_for_resource(
+                        namespace=namespace,
+                        resource_name=pod["name"],
+                    )
+                except Exception as exc:
+                    item["events_error"] = str(exc)
+                problem_pods.append(item)
+
+                if len(problem_pods) >= max_problem_pods:
+                    break
+
+            summaries.append(
+                {
+                    "namespace": namespace,
+                    "total_pods": len(pods),
+                    "problem_pods_count": len(problem_pods),
+                    "problem_pods": problem_pods,
+                    "truncated": len(problem_pods) >= max_problem_pods,
+                }
+            )
+
+        return {
+            "scope": "namespace_health",
+            "namespaces": summaries,
+            "total_pods": sum(item["total_pods"] for item in summaries),
+            "problem_pods_count": sum(item["problem_pods_count"] for item in summaries),
+        }
+
     @staticmethod
     def collect_prometheus(provider: PrometheusProvider, tool_config: dict, variables: dict) -> dict:
         ToolPolicy.assert_allowed("prometheus", "query_range")

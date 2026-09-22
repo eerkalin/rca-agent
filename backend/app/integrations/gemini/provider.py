@@ -103,8 +103,9 @@ RULES:
 4. Return multiple candidates only when justified.
 5. Use names, labels, workload names, container names, images and ports as hints.
 6. Do not infer that a candidate is unhealthy.
-7. If inventory is insufficient, set unresolved=true.
-8. Prefer a small number of meaningful candidates to minimize downstream collection and token use.
+7. If inventory is insufficient or the user asks a namespace-wide question that does not identify a specific service, set unresolved=true.
+8. When unresolved=true, return candidates=[] and always include a short non-empty explanation.
+9. Prefer a small number of meaningful candidates to minimize downstream collection and token use.
 
 ALERT OR USER SYMPTOM:
 {alert_text}
