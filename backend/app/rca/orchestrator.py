@@ -187,6 +187,8 @@ class RCAOrchestrator:
                 log_event(logger, logging.WARNING, "rca.investigation.not_found", "Investigation not found", investigation_id=investigation_id)
                 return
             InvestigationRepository.mark_running(db, investigation)
+            evidence: list[dict] = []
+            resolved_scope_payload = None
             try:
                 if investigation.application_id is None:
                     raise ValueError("Investigation has no application_id")
@@ -197,7 +199,12 @@ class RCAOrchestrator:
                 log_event(logger, logging.INFO, "rca.context.loaded", "Application context loaded", investigation_id=investigation_id, application_id=investigation.application_id, strategy=strategy, tools=len(context["tools"]), dependencies=len(context["dependencies"]))
                 llm = self._llm_provider(db, context)
                 scope, candidates = self._resolve_kubernetes_scope(db, investigation.query, context, llm)
-                evidence: list[dict] = []
+                resolved_scope_payload = {
+                    "application_id": investigation.application_id,
+                    "strategy": strategy,
+                    "llm_connection_id": context["application"].get("llm_connection_id"),
+                    "resolved_scope": scope.model_dump() if scope is not None else None,
+                }
                 rca = None
 
                 if strategy == "collect_then_analyze":
@@ -226,9 +233,21 @@ class RCAOrchestrator:
 
                 if rca is None:
                     raise ValueError("No supported evidence tools could be executed")
-                InvestigationRepository.mark_completed(db=db, investigation=investigation, scope={"application_id": investigation.application_id, "strategy": strategy, "llm_connection_id": context["application"].get("llm_connection_id"), "resolved_scope": scope.model_dump() if scope is not None else None}, evidence=evidence, rca_result=rca.model_dump())
+                InvestigationRepository.mark_completed(
+                    db=db,
+                    investigation=investigation,
+                    scope=resolved_scope_payload,
+                    evidence=evidence,
+                    rca_result=rca.model_dump(),
+                )
                 log_event(logger, logging.INFO, "rca.investigation.complete", "Investigation completed", investigation_id=investigation_id, application_id=investigation.application_id, strategy=strategy, evidence_items=len(evidence), insufficient_evidence=rca.insufficient_evidence, elapsed_ms=elapsed_ms(started))
             except Exception as exc:
                 log_event(logger, logging.ERROR, "rca.investigation.failure", "Investigation failed", investigation_id=investigation_id, application_id=investigation.application_id, elapsed_ms=elapsed_ms(started), error_type=type(exc).__name__, error=str(exc))
                 logger.exception("Investigation failed investigation_id=%s", investigation_id)
-                InvestigationRepository.mark_failed(db, investigation, str(exc))
+                InvestigationRepository.mark_failed(
+                    db,
+                    investigation,
+                    str(exc),
+                    scope=resolved_scope_payload,
+                    evidence=evidence if evidence else None,
+                )
