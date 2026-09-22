@@ -250,12 +250,10 @@ class KubernetesProvider:
     def list_pods_for_selector(
         self,
         namespace: str,
-        selector: dict,
+        selector: dict | None = None,
     ) -> list[dict]:
 
-        if not selector:
-            return []
-
+        selector = selector or {}
         label_selector = ",".join(
             f"{key}={value}"
             for key, value in selector.items()
@@ -263,7 +261,7 @@ class KubernetesProvider:
 
         result = self.core_v1.list_namespaced_pod(
             namespace=namespace,
-            label_selector=label_selector,
+            label_selector=label_selector or None,
         )
 
         pods = []
