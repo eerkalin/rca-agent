@@ -99,6 +99,7 @@ async def receive_grafana_alert(
                 trigger_type="grafana_alert",
                 query=alert.description or alert.title,
                 alert_id=saved_alert.id,
+                llm_history_enabled=bool(application.llm_history_enabled),
             )
             investigation_id = investigation.id
             background_tasks.add_task(RCAOrchestrator().run, investigation_id)
