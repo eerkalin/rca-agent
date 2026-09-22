@@ -13,6 +13,7 @@ from app.db.models import (
     Connection,
     DependencyTool,
     Investigation,
+    LLMInteraction,
     User,
 )
 
