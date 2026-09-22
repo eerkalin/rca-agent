@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 
@@ -12,6 +13,7 @@ from app.integrations.elasticsearch.provider import ElasticsearchLogsProvider
 from app.integrations.gemini.provider import GeminiProvider
 from app.integrations.kubernetes.factory import KubernetesProviderFactory
 from app.integrations.llm.factory import LLMProviderFactory
+from app.integrations.llm.recording import RecordingLLMProvider
 from app.integrations.prometheus.provider import PrometheusProvider
 from app.observability.logging import elapsed_ms, log_event, set_request_id
 from app.rca.evidence_collector import EvidenceCollector
@@ -49,7 +51,12 @@ class RCAOrchestrator:
     @staticmethod
     def _legacy_llm():
         log_event(logger, logging.WARNING, "rca.llm.legacy", "Using legacy Gemini fallback")
-        return GeminiProvider(config={"model": settings.gemini_model}, credentials={"api_key": settings.gemini_api_key})
+        provider = GeminiProvider(
+            config={"model": settings.gemini_model},
+            credentials={"api_key": settings.gemini_api_key},
+        )
+        provider.provider_type = "gemini"
+        return provider
 
     def _llm_provider(self, db: Session, context: dict):
         application = context["application"]
@@ -58,7 +65,9 @@ class RCAOrchestrator:
             return self._legacy_llm()
         runtime = RuntimeConnectionResolver.resolve(db, connection_id)
         log_event(logger, logging.INFO, "rca.llm.selected", "Resolved Application LLM provider", application_id=application.get("id"), connection_id=connection_id, provider_type=runtime.get("provider_type"), model=(application.get("llm_config") or {}).get("model") or (runtime.get("config") or {}).get("model"))
-        return LLMProviderFactory.create(runtime, application.get("llm_config") or {})
+        provider = LLMProviderFactory.create(runtime, application.get("llm_config") or {})
+        provider.provider_type = runtime.get("provider_type")
+        return provider
 
     @staticmethod
     def _analyze(query: str, evidence: list[dict], context: dict, llm):
@@ -176,63 +185,383 @@ class RCAOrchestrator:
         candidate = candidates[0] if candidates else None
         return self._collect_non_kubernetes_tool(db=db, tool=tool, query=query, context=context, candidate=candidate, dependency=dependency)
 
+    @staticmethod
+    def _configured_namespaces(tool: dict) -> list[str]:
+        config = tool.get("config") or {}
+        namespaces = [str(item).strip() for item in (config.get("namespaces") or []) if str(item).strip()]
+        if not namespaces and config.get("namespace"):
+            namespaces = [str(config["namespace"]).strip()]
+        return namespaces
+
+    def _agentic_tool_catalog(self, context: dict) -> tuple[list[dict], dict[str, tuple[dict, dict | None]]]:
+        catalog: list[dict] = []
+        bindings: dict[str, tuple[dict, dict | None]] = {}
+
+        for tool in context["tools"]:
+            key = f"application:{tool['id']}"
+            bindings[key] = (tool, None)
+            descriptor = {
+                "tool_key": key,
+                "scope": "application",
+                "tool_type": tool.get("tool_type"),
+                "provider_type": tool.get("provider_type"),
+                "priority": tool.get("priority"),
+                "read_only": True,
+            }
+            if tool.get("tool_type") == "kubernetes" and tool.get("provider_type") == "kubernetes":
+                namespaces = self._configured_namespaces(tool)
+                descriptor.update({
+                    "description": "Read-only Kubernetes inspection for configured Application namespaces.",
+                    "allowed_namespaces": namespaces,
+                    "operations": [
+                        {
+                            "name": "namespace_health",
+                            "description": "List pod readiness/current container state for one configured namespace or all configured namespaces.",
+                            "arguments": {"operation": "namespace_health", "namespace": "optional configured namespace"},
+                        },
+                        {
+                            "name": "pod_diagnostics",
+                            "description": "Inspect one exact pod from prior evidence: pod status, events and bounded current/previous logs.",
+                            "arguments": {"operation": "pod_diagnostics", "namespace": "required configured namespace", "pod_name": "required exact pod name"},
+                        },
+                        {
+                            "name": "service_diagnostics",
+                            "description": "Inspect one Kubernetes Service and its selected pods/endpoints/logs/events.",
+                            "arguments": {"operation": "service_diagnostics", "namespace": "required configured namespace", "service_name": "required exact service name"},
+                        },
+                    ],
+                })
+            else:
+                descriptor.update({
+                    "description": "Execute this configured read-only observability binding using its stored query/filter configuration.",
+                    "config": tool.get("config") or {},
+                    "arguments": {},
+                })
+            catalog.append(descriptor)
+
+        for dependency in context["dependencies"]:
+            for tool in dependency.get("tools", []):
+                key = f"dependency:{dependency['id']}:{tool['id']}"
+                bindings[key] = (tool, dependency)
+                catalog.append({
+                    "tool_key": key,
+                    "scope": "dependency",
+                    "dependency": {
+                        "id": dependency.get("id"),
+                        "name": dependency.get("name"),
+                        "type": dependency.get("type"),
+                        "description": dependency.get("description"),
+                    },
+                    "tool_type": tool.get("tool_type"),
+                    "provider_type": tool.get("provider_type"),
+                    "description": "Execute this configured read-only dependency diagnostic binding.",
+                    "config": tool.get("config") or {},
+                    "arguments": {},
+                    "read_only": True,
+                })
+
+        return catalog, bindings
+
+    @staticmethod
+    def _choice_signature(tool_key: str, arguments: dict) -> str:
+        return f"{tool_key}:{json.dumps(arguments or {}, sort_keys=True, ensure_ascii=False, default=str)}"
+
+    @staticmethod
+    def _validate_agentic_namespace(tool: dict, namespace: str | None) -> str:
+        allowed = RCAOrchestrator._configured_namespaces(tool)
+        if not allowed:
+            raise ValueError("Kubernetes tool has no configured namespace scope")
+        if namespace is None:
+            if len(allowed) == 1:
+                return allowed[0]
+            raise ValueError("A namespace is required when multiple namespaces are configured")
+        namespace = str(namespace)
+        if namespace not in allowed:
+            raise ValueError(f"Namespace {namespace} is outside the configured Application scope")
+        return namespace
+
+    def _execute_agentic_choice(
+        self,
+        db: Session,
+        *,
+        tool: dict,
+        dependency: dict | None,
+        arguments: dict,
+        query: str,
+        context: dict,
+    ) -> list[dict]:
+        if tool.get("tool_type") != "kubernetes" or tool.get("provider_type") != "kubernetes":
+            return self._collect_non_kubernetes_tool(
+                db=db,
+                tool=tool,
+                query=query,
+                context=context,
+                candidate=None,
+                dependency=dependency,
+            )
+
+        provider = self._kubernetes_provider(db, tool)
+        operation = str((arguments or {}).get("operation") or "namespace_health")
+        descriptor = self._tool_descriptor(tool)
+        tail_lines = int((tool.get("config") or {}).get("tail_lines", 50))
+
+        if operation == "namespace_health":
+            requested_namespace = (arguments or {}).get("namespace")
+            if requested_namespace:
+                namespaces = [self._validate_agentic_namespace(tool, requested_namespace)]
+            else:
+                namespaces = self._configured_namespaces(tool)
+                if not namespaces:
+                    raise ValueError("Kubernetes tool has no configured namespace scope")
+            snapshot = self.evidence_collector.collect_namespace_health(
+                kubernetes=provider,
+                namespaces=namespaces,
+            )
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespaces": namespaces},
+                "scope_candidate": {},
+                "kubernetes": snapshot,
+            }]
+
+        if operation == "pod_diagnostics":
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            pod_name = str((arguments or {}).get("pod_name") or "").strip()
+            if not pod_name:
+                raise ValueError("pod_diagnostics requires pod_name")
+            snapshot = self.evidence_collector.collect_pod_diagnostics(
+                kubernetes=provider,
+                namespace=namespace,
+                pod_name=pod_name,
+                tail_lines=tail_lines,
+            )
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespace": namespace, "pod_name": pod_name},
+                "scope_candidate": {},
+                "kubernetes": snapshot,
+            }]
+
+        if operation == "service_diagnostics":
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            service_name = str((arguments or {}).get("service_name") or "").strip()
+            if not service_name:
+                raise ValueError("service_diagnostics requires service_name")
+            snapshot = self.evidence_collector.collect_for_service(
+                kubernetes=provider,
+                namespace=namespace,
+                service_name=service_name,
+                tail_lines=tail_lines,
+            )
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespace": namespace, "service_name": service_name},
+                "scope_candidate": {"service_name": service_name, "namespace": namespace},
+                "kubernetes": snapshot,
+            }]
+
+        raise ValueError(f"Unsupported Kubernetes agentic operation: {operation}")
+
+    def _run_agentic(self, db: Session, investigation, context: dict, llm):
+        catalog, bindings = self._agentic_tool_catalog(context)
+        if not catalog:
+            raise ValueError("Application has no executable read-only tools")
+
+        evidence: list[dict] = []
+        executed_signatures: list[str] = []
+        decisions: list[dict] = []
+        max_rounds = 6
+
+        for round_number in range(1, max_rounds + 1):
+            reduced = EvidenceReducer.reduce(evidence)
+            decision = llm.plan_next_tools(
+                symptom=investigation.query,
+                available_tools=catalog,
+                evidence=reduced,
+                executed_tool_keys=executed_signatures,
+            )
+            decisions.append({"round": round_number, **decision.model_dump()})
+
+            if decision.stop:
+                if evidence:
+                    break
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "rca.agentic.empty_stop",
+                    "LLM requested stop before any evidence; continuing",
+                    investigation_id=investigation.id,
+                    round=round_number,
+                )
+
+            executed_this_round = 0
+            for choice in decision.choices:
+                binding = bindings.get(choice.tool_key)
+                if binding is None:
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "rca.agentic.invalid_tool",
+                        "LLM selected an unavailable tool key",
+                        investigation_id=investigation.id,
+                        tool_key=choice.tool_key,
+                    )
+                    continue
+
+                signature = self._choice_signature(choice.tool_key, choice.arguments)
+                if signature in executed_signatures:
+                    continue
+
+                tool, dependency = binding
+                try:
+                    observations = self._execute_agentic_choice(
+                        db,
+                        tool=tool,
+                        dependency=dependency,
+                        arguments=choice.arguments,
+                        query=investigation.query,
+                        context=context,
+                    )
+                except Exception as exc:
+                    observations = [{
+                        "tool": self._tool_descriptor(tool),
+                        "dependency": dependency,
+                        "agentic_arguments": choice.arguments,
+                        "error": str(exc),
+                    }]
+                evidence.extend(observations)
+                executed_signatures.append(signature)
+                executed_this_round += 1
+
+            if executed_this_round == 0:
+                if evidence:
+                    break
+                # Safe deterministic bootstrap if a model returns no usable choice.
+                first = catalog[0]
+                tool, dependency = bindings[first["tool_key"]]
+                arguments = {"operation": "namespace_health"} if tool.get("tool_type") == "kubernetes" else {}
+                evidence.extend(self._execute_agentic_choice(
+                    db,
+                    tool=tool,
+                    dependency=dependency,
+                    arguments=arguments,
+                    query=investigation.query,
+                    context=context,
+                ))
+                executed_signatures.append(self._choice_signature(first["tool_key"], arguments))
+
+        if not evidence:
+            raise ValueError("Agentic planner produced no executable evidence collection")
+
+        rca = self._analyze(investigation.query, evidence, context, llm)
+        return evidence, decisions, rca
+
+    @staticmethod
+    def _persist_llm_usage(db: Session, investigation, llm) -> None:
+        usage = dict(getattr(llm, "usage_totals", {}) or {})
+        InvestigationRepository.update_llm_usage(
+            db,
+            investigation,
+            provider_type=getattr(llm, "provider_type", None),
+            model=getattr(llm, "model", None),
+            input_tokens=int(usage.get("input_tokens", 0) or 0),
+            output_tokens=int(usage.get("output_tokens", 0) or 0),
+            total_tokens=int(usage.get("total_tokens", 0) or 0),
+            token_usage_available=bool(usage.get("available", False)),
+        )
+
     def run(self, investigation_id: int) -> None:
         set_request_id(f"investigation-{investigation_id}")
         started = time.perf_counter()
         self._kubernetes_providers = {}
         log_event(logger, logging.INFO, "rca.investigation.start", "Investigation started", investigation_id=investigation_id)
+
         with SessionLocal() as db:
             investigation = InvestigationRepository.get_by_id(db, investigation_id)
             if investigation is None:
                 log_event(logger, logging.WARNING, "rca.investigation.not_found", "Investigation not found", investigation_id=investigation_id)
                 return
+
             InvestigationRepository.mark_running(db, investigation)
             evidence: list[dict] = []
             resolved_scope_payload = None
+            llm = None
+            strategy = None
+
             try:
                 if investigation.application_id is None:
                     raise ValueError("Investigation has no application_id")
+
                 context = ApplicationContextService.load(db, investigation.application_id)
                 if not context["tools"]:
                     raise ValueError("Application has no enabled investigation tools")
-                strategy = context["application"]["investigation_strategy"]
-                log_event(logger, logging.INFO, "rca.context.loaded", "Application context loaded", investigation_id=investigation_id, application_id=investigation.application_id, strategy=strategy, tools=len(context["tools"]), dependencies=len(context["dependencies"]))
-                llm = self._llm_provider(db, context)
-                scope, candidates = self._resolve_kubernetes_scope(db, investigation.query, context, llm)
-                resolved_scope_payload = {
-                    "application_id": investigation.application_id,
-                    "strategy": strategy,
-                    "llm_connection_id": context["application"].get("llm_connection_id"),
-                    "resolved_scope": scope.model_dump() if scope is not None else None,
-                }
-                rca = None
 
-                if strategy == "collect_then_analyze":
+                strategy = context["application"]["investigation_strategy"]
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "rca.context.loaded",
+                    "Application context loaded",
+                    investigation_id=investigation_id,
+                    application_id=investigation.application_id,
+                    strategy=strategy,
+                    tools=len(context["tools"]),
+                    dependencies=len(context["dependencies"]),
+                )
+
+                llm = self._llm_provider(db, context)
+                if investigation.llm_history_enabled:
+                    llm = RecordingLLMProvider(
+                        llm,
+                        db=db,
+                        investigation_id=investigation.id,
+                        provider_type=getattr(llm, "provider_type", None),
+                        model=getattr(llm, "model", None),
+                    )
+
+                if strategy == "agentic":
+                    evidence, decisions, rca = self._run_agentic(db, investigation, context, llm)
+                    resolved_scope_payload = {
+                        "application_id": investigation.application_id,
+                        "strategy": strategy,
+                        "llm_connection_id": context["application"].get("llm_connection_id"),
+                        "agentic_decisions": decisions,
+                    }
+                else:
+                    scope, candidates = self._resolve_kubernetes_scope(
+                        db,
+                        investigation.query,
+                        context,
+                        llm,
+                    )
+                    resolved_scope_payload = {
+                        "application_id": investigation.application_id,
+                        "strategy": strategy,
+                        "llm_connection_id": context["application"].get("llm_connection_id"),
+                        "resolved_scope": scope.model_dump() if scope is not None else None,
+                    }
                     for tool in context["tools"]:
-                        evidence.extend(self._collect_application_tool(db=db, tool=tool, query=investigation.query, context=context, candidates=candidates, collect_all=True))
+                        evidence.extend(self._collect_application_tool(
+                            db=db,
+                            tool=tool,
+                            query=investigation.query,
+                            context=context,
+                            candidates=candidates,
+                            collect_all=True,
+                        ))
                     for dependency in context["dependencies"]:
                         for tool in dependency.get("tools", []):
-                            evidence.extend(self._collect_dependency_tool(db=db, dependency=dependency, tool=tool, query=investigation.query, context=context, candidates=candidates))
+                            evidence.extend(self._collect_dependency_tool(
+                                db=db,
+                                dependency=dependency,
+                                tool=tool,
+                                query=investigation.query,
+                                context=context,
+                                candidates=candidates,
+                            ))
                     rca = self._analyze(investigation.query, evidence, context, llm)
-                else:
-                    for tool in context["tools"]:
-                        evidence.extend(self._collect_application_tool(db=db, tool=tool, query=investigation.query, context=context, candidates=candidates, collect_all=False))
-                        rca = self._analyze(investigation.query, evidence, context, llm)
-                        if not rca.insufficient_evidence:
-                            log_event(logger, logging.INFO, "rca.agentic.stop", "Agentic investigation stopped after sufficient evidence", tool_id=tool.get("id"), evidence_items=len(evidence))
-                            break
-                    if rca is None or rca.insufficient_evidence:
-                        for dependency in context["dependencies"]:
-                            for tool in dependency.get("tools", []):
-                                evidence.extend(self._collect_dependency_tool(db=db, dependency=dependency, tool=tool, query=investigation.query, context=context, candidates=candidates))
-                                rca = self._analyze(investigation.query, evidence, context, llm)
-                                if not rca.insufficient_evidence:
-                                    break
-                            if rca is not None and not rca.insufficient_evidence:
-                                break
 
-                if rca is None:
-                    raise ValueError("No supported evidence tools could be executed")
+                self._persist_llm_usage(db, investigation, llm)
                 InvestigationRepository.mark_completed(
                     db=db,
                     investigation=investigation,
@@ -240,9 +569,35 @@ class RCAOrchestrator:
                     evidence=evidence,
                     rca_result=rca.model_dump(),
                 )
-                log_event(logger, logging.INFO, "rca.investigation.complete", "Investigation completed", investigation_id=investigation_id, application_id=investigation.application_id, strategy=strategy, evidence_items=len(evidence), insufficient_evidence=rca.insufficient_evidence, elapsed_ms=elapsed_ms(started))
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "rca.investigation.complete",
+                    "Investigation completed",
+                    investigation_id=investigation_id,
+                    application_id=investigation.application_id,
+                    strategy=strategy,
+                    evidence_items=len(evidence),
+                    insufficient_evidence=rca.insufficient_evidence,
+                    elapsed_ms=elapsed_ms(started),
+                )
             except Exception as exc:
-                log_event(logger, logging.ERROR, "rca.investigation.failure", "Investigation failed", investigation_id=investigation_id, application_id=investigation.application_id, elapsed_ms=elapsed_ms(started), error_type=type(exc).__name__, error=str(exc))
+                if llm is not None:
+                    try:
+                        self._persist_llm_usage(db, investigation, llm)
+                    except Exception:
+                        logger.exception("Unable to persist LLM usage investigation_id=%s", investigation_id)
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "rca.investigation.failure",
+                    "Investigation failed",
+                    investigation_id=investigation_id,
+                    application_id=investigation.application_id,
+                    elapsed_ms=elapsed_ms(started),
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
                 logger.exception("Investigation failed investigation_id=%s", investigation_id)
                 InvestigationRepository.mark_failed(
                     db,
