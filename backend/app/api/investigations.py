@@ -1,6 +1,12 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
 
+
+def _duration_ms(started_at, finished_at) -> int | None:
+    if started_at is None or finished_at is None:
+        return None
+    return max(0, int((finished_at - started_at).total_seconds() * 1000))
+
 from app.applications.repository import ApplicationRepository
 from app.db.session import SessionLocal
 from app.rca.orchestrator import RCAOrchestrator
@@ -30,6 +36,13 @@ def serialize_investigation(investigation, include_evidence: bool = False) -> di
         "scope": investigation.scope,
         "rca": investigation.rca_result,
         "llm_history_enabled": bool(investigation.llm_history_enabled),
+        "llm_provider_type": investigation.llm_provider_type,
+        "llm_model": investigation.llm_model,
+        "llm_input_tokens": int(investigation.llm_input_tokens or 0),
+        "llm_output_tokens": int(investigation.llm_output_tokens or 0),
+        "llm_total_tokens": int(investigation.llm_total_tokens or 0),
+        "llm_token_usage_available": bool(investigation.llm_token_usage_available),
+        "duration_ms": _duration_ms(investigation.started_at, investigation.finished_at),
         "error": investigation.error,
         "started_at": investigation.started_at,
         "finished_at": investigation.finished_at,
@@ -136,6 +149,11 @@ async def get_investigation_llm_history(investigation_id: int):
                     "request": item.request_payload,
                     "response": item.response_payload,
                     "error": item.error,
+                    "input_tokens": int(item.input_tokens or 0),
+                    "output_tokens": int(item.output_tokens or 0),
+                    "total_tokens": int(item.total_tokens or 0),
+                    "token_usage_available": bool(item.token_usage_available),
+                    "duration_ms": item.duration_ms,
                     "created_at": item.created_at,
                 }
                 for item in items
