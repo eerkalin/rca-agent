@@ -109,6 +109,42 @@ async def list_investigations(
         }
 
 
+@router.post("/{investigation_id}/retry", status_code=202)
+async def retry_investigation(
+    investigation_id: int,
+    background_tasks: BackgroundTasks,
+):
+    with SessionLocal() as db:
+        investigation = InvestigationRepository.get_by_id(db, investigation_id)
+        if investigation is None:
+            raise HTTPException(status_code=404, detail="Investigation not found")
+        if investigation.status != "failed":
+            raise HTTPException(
+                status_code=409,
+                detail="Only failed investigations can be retried",
+            )
+        if investigation.application_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Investigation no longer has an Application",
+            )
+        application = ApplicationRepository.get(db, investigation.application_id)
+        if application is None:
+            raise HTTPException(status_code=409, detail="Application no longer exists")
+        if not application.enabled:
+            raise HTTPException(status_code=409, detail="Application is disabled")
+
+        InvestigationRepository.reset_for_retry(db, investigation)
+
+    background_tasks.add_task(RCAOrchestrator().run, investigation_id)
+    return {
+        "accepted": True,
+        "investigation_id": investigation_id,
+        "status": "queued",
+        "retry": True,
+    }
+
+
 @router.get("/{investigation_id}")
 async def get_investigation(investigation_id: int):
     with SessionLocal() as db:

@@ -27,7 +27,62 @@ class GeminiProvider:
         self.model = application_config.get("model") or config.get("model") or settings.gemini_model
         self.temperature = float(application_config.get("temperature", config.get("temperature", 0.1)))
         self.max_output_tokens = application_config.get("max_output_tokens") or config.get("max_output_tokens")
+        self.retry_attempts = max(1, int(config.get("retry_attempts", 4)))
+        self.retry_backoff_seconds = max(0.1, float(config.get("retry_backoff_seconds", 1.0)))
+        self.provider_type = "gemini"
         self.usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "available": False}
+
+    @staticmethod
+    def _status_code(exc) -> int | None:
+        for value in (
+            getattr(exc, "status_code", None),
+            getattr(exc, "code", None),
+            getattr(getattr(exc, "response", None), "status_code", None),
+        ):
+            try:
+                if value is not None:
+                    return int(value)
+            except (TypeError, ValueError):
+                continue
+        text = str(exc)
+        for candidate in (429, 500, 502, 503, 504):
+            if str(candidate) in text:
+                return candidate
+        return None
+
+    @staticmethod
+    def _retryable_status(status_code: int | None) -> bool:
+        return status_code in {429, 500, 502, 503, 504}
+
+    def _generate_with_retry(self, *, contents, config=None):
+        last_error = None
+        for attempt in range(1, self.retry_attempts + 1):
+            try:
+                kwargs = {"model": self.model, "contents": contents}
+                if config is not None:
+                    kwargs["config"] = config
+                return self.client.models.generate_content(**kwargs)
+            except Exception as exc:
+                last_error = exc
+                status_code = self._status_code(exc)
+                if not self._retryable_status(status_code) or attempt >= self.retry_attempts:
+                    raise
+                delay = min(self.retry_backoff_seconds * (2 ** max(0, attempt - 1)), 12.0)
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "gemini.retry",
+                    "Transient Gemini error; retrying",
+                    model=self.model,
+                    status_code=status_code,
+                    attempt=attempt,
+                    retry_in_seconds=delay,
+                    error_type=type(exc).__name__,
+                )
+                time.sleep(delay)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Gemini request failed without a response")
 
     def _record_usage(self, response) -> None:
         metadata = getattr(response, "usage_metadata", None)
@@ -53,7 +108,7 @@ class GeminiProvider:
         started = time.perf_counter()
         log_event(logger, logging.INFO, "gemini.test.start", "Gemini connection test started", model=self.model)
         try:
-            response = self.client.models.generate_content(model=self.model, contents="Reply only with OK")
+            response = self._generate_with_retry(contents="Reply only with OK")
             self._record_usage(response)
             result = {"connected": True, "provider": "gemini", "model": self.model, "response": response.text}
             log_event(logger, logging.INFO, "gemini.test.success", "Gemini connection test completed", model=self.model, elapsed_ms=elapsed_ms(started))
@@ -91,7 +146,7 @@ STRICT RULES:
 4. Distinguish observations, hypotheses, root cause and contributing factors.
 5. A healthy infrastructure object does not prove a healthy business transaction.
 6. A warning or correlation is not automatically causation.
-7. Build a 5 Why chain only as far as evidence supports it. Do NOT fabricate five levels merely to reach five.
+7. You, the LLM, formulate both each Why question and its evidence-backed answer. RCA Agent never writes the 5 Why chain for you. Build only as far as evidence supports it; do NOT fabricate five levels merely to reach five.
 8. For every 5 Why step set evidence_supported accurately and attach evidence when available.
 9. If the next Why cannot be established from available evidence, stop the chain and explain the limitation.
 10. If root cause cannot be proven, set root_cause to null and insufficient_evidence=true.
@@ -106,7 +161,7 @@ Return a concise technical RCA suitable for incident engineers.
         started = time.perf_counter()
         log_event(logger, logging.INFO, "gemini.rca.start", "Gemini RCA analysis started", model=self.model, evidence_items=len(evidence))
         try:
-            response = self.client.models.generate_content(model=self.model, contents=prompt, config=self._config(RCAResult))
+            response = self._generate_with_retry(contents=prompt, config=self._config(RCAResult))
             self._record_usage(response)
             result = RCAResult.model_validate_json(response.text)
             log_event(logger, logging.INFO, "gemini.rca.success", "Gemini RCA analysis completed", model=self.model, elapsed_ms=elapsed_ms(started), insufficient_evidence=result.insufficient_evidence)
@@ -148,12 +203,13 @@ RULES:
 6. Do not repeat the same tool with the same arguments.
 7. If evidence is sufficient to answer the symptom, set stop=true.
 8. If there is no evidence yet, do not stop unless the question is answerable from Application context alone.
-9. For Kubernetes readiness/health questions, first inspect namespace health. If a problematic pod is found, pod diagnostics can then retrieve its events/logs.
+9. Tool descriptions may contain investigation recommendations (for example, namespace health before pod diagnostics). Treat them as guidance, not a hard-coded workflow: choose the observations that best answer the user's question.
+10. When multiple independent observations are useful, you may return several choices in one round with parallel=true.
+11. Set stop=true only when the evidence is sufficient for a final answer or no permitted tool can materially improve it.
 """
         started = time.perf_counter()
         log_event(logger, logging.INFO, "gemini.agentic.plan.start", "Gemini agentic planning started", model=self.model, tools=len(available_tools), evidence_items=len(evidence))
-        response = self.client.models.generate_content(
-            model=self.model,
+        response = self._generate_with_retry(
             contents=prompt,
             config=self._config(AgenticDecision),
         )
@@ -188,7 +244,7 @@ TECHNICAL INVENTORY:
         started = time.perf_counter()
         log_event(logger, logging.INFO, "gemini.scope.start", "Gemini scope resolution started", model=self.model, inventory_size=len(technical_services))
         try:
-            response = self.client.models.generate_content(model=self.model, contents=prompt, config=self._config(ScopeResolution))
+            response = self._generate_with_retry(contents=prompt, config=self._config(ScopeResolution))
             self._record_usage(response)
             result = ScopeResolution.model_validate_json(response.text)
             log_event(logger, logging.INFO, "gemini.scope.success", "Gemini scope resolution completed", model=self.model, elapsed_ms=elapsed_ms(started), candidates=len(result.candidates), unresolved=result.unresolved)

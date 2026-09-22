@@ -20,6 +20,7 @@ from app.rca.evidence_collector import EvidenceCollector
 from app.rca.evidence_reducer import EvidenceReducer
 from app.rca.repository import InvestigationRepository
 from app.rca.scope_resolver import ScopeResolver
+from app.rca.tool_policy import ToolPolicy
 
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,8 @@ class RCAOrchestrator:
         runtime = RuntimeConnectionResolver.resolve(db, connection_id)
         log_event(logger, logging.INFO, "rca.llm.selected", "Resolved Application LLM provider", application_id=application.get("id"), connection_id=connection_id, provider_type=runtime.get("provider_type"), model=(application.get("llm_config") or {}).get("model") or (runtime.get("config") or {}).get("model"))
         provider = LLMProviderFactory.create(runtime, application.get("llm_config") or {})
-        provider.provider_type = runtime.get("provider_type")
+        if not getattr(provider, "provider_type", None):
+            provider.provider_type = runtime.get("provider_type")
         return provider
 
     @staticmethod
@@ -232,10 +234,65 @@ class RCAOrchestrator:
                     ],
                 })
             else:
+                config = tool.get("config") or {}
+                provider_type = tool.get("provider_type")
+                tool_type = tool.get("tool_type")
+                operations = []
+                if tool_type == "metrics" and provider_type == "prometheus":
+                    operations = [
+                        {
+                            "name": "configured_metrics",
+                            "description": "Run the Application's preconfigured Prometheus queries.",
+                            "arguments": {"operation": "configured_metrics"},
+                        },
+                        {
+                            "name": "promql",
+                            "description": "Run one read-only PromQL query chosen by the LLM.",
+                            "arguments": {
+                                "operation": "promql",
+                                "promql": "required PromQL string",
+                                "mode": "optional instant or range",
+                                "window_minutes": "optional integer, max 120",
+                                "step": "optional Prometheus step such as 30s",
+                            },
+                        },
+                    ]
+                elif tool_type == "logs" and provider_type in {"elasticsearch", "elastic"}:
+                    operations = [{
+                        "name": "search_logs",
+                        "description": "Search configured read-only log indices. Index pattern remains fixed by Application configuration.",
+                        "arguments": {
+                            "operation": "search_logs",
+                            "search_text": "optional text query",
+                            "service_name": "optional exact service name",
+                            "namespace": "optional namespace",
+                            "lookback_minutes": "optional integer, max 120",
+                            "size": "optional integer, max configured size",
+                        },
+                    }]
+                elif tool_type == "traces" and provider_type == "elastic_apm":
+                    operations = [{
+                        "name": "search_traces",
+                        "description": "Search configured Elastic APM trace indices and load bounded candidate traces.",
+                        "arguments": {
+                            "operation": "search_traces",
+                            "service_name": "optional exact service name",
+                            "namespace": "optional namespace",
+                            "lookback_minutes": "optional integer, max 120",
+                        },
+                    }]
                 descriptor.update({
-                    "description": "Execute this configured read-only observability binding using its stored query/filter configuration.",
-                    "config": tool.get("config") or {},
-                    "arguments": {},
+                    "description": "Read-only observability binding. The LLM chooses one listed operation and its bounded arguments.",
+                    "config_summary": {
+                        key: value
+                        for key, value in config.items()
+                        if key not in {"queries", "filters", "source_fields", "message_fields"}
+                    },
+                    "operations": operations or [{
+                        "name": "configured_collection",
+                        "description": "Execute this configured read-only diagnostic binding.",
+                        "arguments": {"operation": "configured_collection"},
+                    }],
                 })
             catalog.append(descriptor)
 
@@ -291,6 +348,110 @@ class RCAOrchestrator:
         context: dict,
     ) -> list[dict]:
         if tool.get("tool_type") != "kubernetes" or tool.get("provider_type") != "kubernetes":
+            descriptor = self._tool_descriptor(tool)
+            connection = RuntimeConnectionResolver.resolve(db, tool.get("connection_id"))
+            provider_type = tool.get("provider_type")
+            tool_type = tool.get("tool_type")
+            config = tool.get("config") or {}
+            operation = str((arguments or {}).get("operation") or "configured_collection")
+            base = {
+                "tool": descriptor,
+                "dependency": (
+                    {"id": dependency.get("id"), "name": dependency.get("name"), "type": dependency.get("type")}
+                    if dependency else None
+                ),
+                "agentic_arguments": arguments or {},
+                "scope_candidate": {},
+            }
+
+            if tool_type == "metrics" and provider_type == "prometheus":
+                provider = PrometheusProvider(
+                    config=connection.get("config", {}),
+                    credentials=connection.get("credentials", {}),
+                )
+                if operation == "promql":
+                    ToolPolicy.assert_allowed("prometheus", "query_range")
+                    promql = str((arguments or {}).get("promql") or "").strip()
+                    if not promql:
+                        raise ValueError("promql operation requires promql")
+                    mode = str((arguments or {}).get("mode") or "range")
+                    if mode == "instant":
+                        ToolPolicy.assert_allowed("prometheus", "query")
+                        result = provider.instant_query(promql)
+                    else:
+                        from datetime import datetime, timedelta, timezone
+                        window = min(max(int((arguments or {}).get("window_minutes") or 15), 1), 120)
+                        end = datetime.now(timezone.utc)
+                        result = provider.range_query(
+                            promql,
+                            start=end - timedelta(minutes=window),
+                            end=end,
+                            step=(arguments or {}).get("step"),
+                        )
+                    return [{**base, "metrics": {
+                        "provider": "prometheus",
+                        "queries": [{"name": "agentic_promql", "promql": promql, "result": result}],
+                    }}]
+                return self._collect_non_kubernetes_tool(
+                    db=db,
+                    tool=tool,
+                    query=query,
+                    context=context,
+                    candidate=None,
+                    dependency=dependency,
+                )
+
+            if tool_type == "logs" and provider_type in {"elasticsearch", "elastic"}:
+                ToolPolicy.assert_allowed("elasticsearch", "search_logs")
+                provider = ElasticsearchLogsProvider(
+                    config=connection.get("config", {}),
+                    credentials=connection.get("credentials", {}),
+                )
+                filters = dict(config.get("filters") or {})
+                service_name = (arguments or {}).get("service_name")
+                namespace = (arguments or {}).get("namespace")
+                if service_name and config.get("service_field"):
+                    filters[config["service_field"]] = service_name
+                if namespace and config.get("namespace_field"):
+                    filters[config["namespace_field"]] = namespace
+                lookback = min(max(int((arguments or {}).get("lookback_minutes") or config.get("lookback_minutes", 15)), 1), 120)
+                configured_size = min(max(int(config.get("size", 200)), 1), 1000)
+                size = min(max(int((arguments or {}).get("size") or configured_size), 1), configured_size)
+                logs = provider.search_logs(
+                    index_pattern=config.get("index_pattern", ""),
+                    symptom=(arguments or {}).get("search_text") or query,
+                    filters=filters,
+                    lookback_minutes=lookback,
+                    size=size,
+                    time_field=config.get("time_field", "@timestamp"),
+                    message_fields=config.get("message_fields"),
+                    source_fields=config.get("source_fields"),
+                )
+                return [{**base, "logs": logs}]
+
+            if tool_type == "traces" and provider_type == "elastic_apm":
+                ToolPolicy.assert_allowed("elastic_apm", "search_traces")
+                ToolPolicy.assert_allowed("elastic_apm", "get_trace")
+                provider = ElasticAPMProvider(
+                    config=connection.get("config", {}),
+                    credentials=connection.get("credentials", {}),
+                )
+                dynamic_config = dict(config)
+                dynamic_config["lookback_minutes"] = min(
+                    max(int((arguments or {}).get("lookback_minutes") or config.get("lookback_minutes", 15)), 1),
+                    120,
+                )
+                variables = self._variables(context, candidate=None, dependency=dependency)
+                if (arguments or {}).get("service_name"):
+                    variables["service_name"] = (arguments or {}).get("service_name")
+                if (arguments or {}).get("namespace"):
+                    variables["namespace"] = (arguments or {}).get("namespace")
+                traces = provider.collect_trace_evidence(
+                    tool_config=dynamic_config,
+                    variables=variables,
+                )
+                return [{**base, "traces": traces}]
+
             return self._collect_non_kubernetes_tool(
                 db=db,
                 tool=tool,
