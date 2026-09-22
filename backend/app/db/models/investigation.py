@@ -38,6 +38,7 @@ class Investigation(Base):
     llm_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     llm_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     llm_total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    llm_token_usage_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -67,6 +68,7 @@ class LLMInteraction(Base):
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    token_usage_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(), index=True
