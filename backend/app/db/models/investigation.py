@@ -33,6 +33,11 @@ class Investigation(Base):
     evidence: Mapped[list | None] = mapped_column(JSON, nullable=True)
     rca_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     llm_history_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    llm_provider_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    llm_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    llm_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    llm_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    llm_total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -59,6 +64,10 @@ class LLMInteraction(Base):
     request_payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     response_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(), index=True
     )
