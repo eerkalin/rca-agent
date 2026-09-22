@@ -37,6 +37,31 @@ function formatTokens(item) {
   return Number(item.llm_total_tokens || 0).toLocaleString();
 }
 
+function canRunInvestigationActions() {
+  return !authState?.enabled || ['admin','investigator'].includes(authState?.role);
+}
+
+async function retryInvestigation(id) {
+  if (!canRunInvestigationActions()) return;
+  const button = qs('#retry-investigation');
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Retrying…';
+  }
+  try {
+    const result = await api(`/investigations/${id}/retry`, {method:'POST'});
+    toast(`Investigation #${result.investigation_id} queued again`);
+    await loadInvestigations();
+    await openInvestigation(id);
+  } catch (error) {
+    toast(error.message);
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Retry investigation';
+    }
+  }
+}
+
 function aiLabel(item) {
   const providerType = item?.llm_provider_type;
   const providerMeta = providerType ? provider(providerType) : null;
@@ -101,7 +126,7 @@ async function openInvestigation(id) {
   detail.classList.remove('hidden');
   const pending = item.status === 'queued' || item.status === 'running';
   const tokenText = item.llm_token_usage_available ? Number(item.llm_total_tokens || 0).toLocaleString() : 'Unavailable';
-  detail.innerHTML = `<div class="investigation-detail-header"><button class="back-button" id="close-investigation">← Back to investigations</button><div class="card-title-row"><div><div class="eyebrow">Investigation #${item.id}</div><h1>${esc(applicationName(item.application_id))}</h1><p>${esc(item.query || '')}</p></div><div class="actions compact-actions"><span class="badge ${investigationStatusClass(item.status)}">${esc(friendlyValue(item.status || 'unknown'))}</span>${pending ? '<button id="refresh-investigation-detail">Refresh result</button>' : ''}</div></div><div class="investigation-stats"><div><span>AI</span><strong>${esc(aiLabel(item))}</strong></div><div><span>Total tokens</span><strong>${esc(tokenText)}</strong></div><div><span>Investigation time</span><strong>${esc(formatDuration(item.duration_ms))}</strong></div><div><span>LLM history</span><strong>${item.llm_history_enabled ? 'Saved' : 'Not saved'}</strong></div></div><div class="investigation-meta"><span><strong>Trigger</strong> ${esc(friendlyValue(item.trigger_type || 'unknown'))}</span><span><strong>Created</strong> ${esc(formatTimestamp(item.created_at))}</span><span><strong>Started</strong> ${esc(formatTimestamp(item.started_at))}</span><span><strong>Finished</strong> ${esc(formatTimestamp(item.finished_at))}</span>${item.alert_id ? `<span><strong>Alert</strong> #${item.alert_id}</span>` : ''}</div></div>${item.error ? `<div class="investigation-error"><strong>Investigation failed</strong><p>${esc(item.error)}</p></div>` : ''}<div class="investigation-result">${renderRCA(item.rca)}</div><details class="raw-evidence"><summary>Technical evidence (${Array.isArray(item.evidence) ? item.evidence.length : 0} items)</summary><pre>${esc(JSON.stringify(item.evidence || [], null, 2))}</pre></details><details class="raw-evidence"><summary>Resolved scope / agent decisions</summary><pre>${esc(JSON.stringify(item.scope || {}, null, 2))}</pre></details><details class="raw-evidence llm-history-panel"><summary>LLM request / response history</summary><div id="llm-history-content" class="llm-history-content"><div class="hint">Loading…</div></div></details>`;
+  detail.innerHTML = `<div class="investigation-detail-header"><button class="back-button" id="close-investigation">← Back to investigations</button><div class="card-title-row"><div><div class="eyebrow">Investigation #${item.id}</div><h1>${esc(applicationName(item.application_id))}</h1><p>${esc(item.query || '')}</p></div><div class="actions compact-actions"><span class="badge ${investigationStatusClass(item.status)}">${esc(friendlyValue(item.status || 'unknown'))}</span>${pending ? '<button id="refresh-investigation-detail">Refresh result</button>' : ''}${item.status === 'failed' && canRunInvestigationActions() ? '<button id="retry-investigation" class="primary">Retry investigation</button>' : ''}</div></div><div class="investigation-stats"><div><span>AI</span><strong>${esc(aiLabel(item))}</strong></div><div><span>Total tokens</span><strong>${esc(tokenText)}</strong></div><div><span>Investigation time</span><strong>${esc(formatDuration(item.duration_ms))}</strong></div><div><span>LLM history</span><strong>${item.llm_history_enabled ? 'Saved' : 'Not saved'}</strong></div></div><div class="investigation-meta"><span><strong>Trigger</strong> ${esc(friendlyValue(item.trigger_type || 'unknown'))}</span><span><strong>Created</strong> ${esc(formatTimestamp(item.created_at))}</span><span><strong>Started</strong> ${esc(formatTimestamp(item.started_at))}</span><span><strong>Finished</strong> ${esc(formatTimestamp(item.finished_at))}</span>${item.alert_id ? `<span><strong>Alert</strong> #${item.alert_id}</span>` : ''}</div></div>${item.error ? `<div class="investigation-error"><strong>Investigation failed</strong><p>${esc(item.error)}</p></div>` : ''}<div class="investigation-result">${renderRCA(item.rca)}</div><details class="raw-evidence"><summary>Technical evidence (${Array.isArray(item.evidence) ? item.evidence.length : 0} items)</summary><pre>${esc(JSON.stringify(item.evidence || [], null, 2))}</pre></details><details class="raw-evidence"><summary>Resolved scope / agent decisions</summary><pre>${esc(JSON.stringify(item.scope || {}, null, 2))}</pre></details><details class="raw-evidence llm-history-panel"><summary>LLM request / response history</summary><div id="llm-history-content" class="llm-history-content"><div class="hint">Loading…</div></div></details>`;
   qs('#investigations-list')?.classList.add('hidden');
   qs('#investigations-view .section-head')?.classList.add('hidden');
   qs('#close-investigation').onclick = () => {
@@ -111,6 +136,8 @@ async function openInvestigation(id) {
   };
   const refreshButton = qs('#refresh-investigation-detail');
   if (refreshButton) refreshButton.onclick = () => openInvestigation(id).catch(error => toast(error.message));
+  const retryButton = qs('#retry-investigation');
+  if (retryButton) retryButton.onclick = () => retryInvestigation(id);
   loadLLMHistory(id);
   detail.scrollIntoView({behavior:'smooth', block:'start'});
 }
