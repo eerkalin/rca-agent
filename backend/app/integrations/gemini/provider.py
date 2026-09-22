@@ -27,7 +27,62 @@ class GeminiProvider:
         self.model = application_config.get("model") or config.get("model") or settings.gemini_model
         self.temperature = float(application_config.get("temperature", config.get("temperature", 0.1)))
         self.max_output_tokens = application_config.get("max_output_tokens") or config.get("max_output_tokens")
+        self.retry_attempts = max(1, int(config.get("retry_attempts", 4)))
+        self.retry_backoff_seconds = max(0.1, float(config.get("retry_backoff_seconds", 1.0)))
+        self.provider_type = "gemini"
         self.usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "available": False}
+
+    @staticmethod
+    def _status_code(exc) -> int | None:
+        for value in (
+            getattr(exc, "status_code", None),
+            getattr(exc, "code", None),
+            getattr(getattr(exc, "response", None), "status_code", None),
+        ):
+            try:
+                if value is not None:
+                    return int(value)
+            except (TypeError, ValueError):
+                continue
+        text = str(exc)
+        for candidate in (429, 500, 502, 503, 504):
+            if str(candidate) in text:
+                return candidate
+        return None
+
+    @staticmethod
+    def _retryable_status(status_code: int | None) -> bool:
+        return status_code in {429, 500, 502, 503, 504}
+
+    def _generate_with_retry(self, *, contents, config=None):
+        last_error = None
+        for attempt in range(1, self.retry_attempts + 1):
+            try:
+                kwargs = {"model": self.model, "contents": contents}
+                if config is not None:
+                    kwargs["config"] = config
+                return self.client.models.generate_content(**kwargs)
+            except Exception as exc:
+                last_error = exc
+                status_code = self._status_code(exc)
+                if not self._retryable_status(status_code) or attempt >= self.retry_attempts:
+                    raise
+                delay = min(self.retry_backoff_seconds * (2 ** max(0, attempt - 1)), 12.0)
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "gemini.retry",
+                    "Transient Gemini error; retrying",
+                    model=self.model,
+                    status_code=status_code,
+                    attempt=attempt,
+                    retry_in_seconds=delay,
+                    error_type=type(exc).__name__,
+                )
+                time.sleep(delay)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Gemini request failed without a response")
 
     def _record_usage(self, response) -> None:
         metadata = getattr(response, "usage_metadata", None)
@@ -53,7 +108,7 @@ class GeminiProvider:
         started = time.perf_counter()
         log_event(logger, logging.INFO, "gemini.test.start", "Gemini connection test started", model=self.model)
         try:
-            response = self.client.models.generate_content(model=self.model, contents="Reply only with OK")
+            response = self._generate_with_retry(contents="Reply only with OK")
             self._record_usage(response)
             result = {"connected": True, "provider": "gemini", "model": self.model, "response": response.text}
             log_event(logger, logging.INFO, "gemini.test.success", "Gemini connection test completed", model=self.model, elapsed_ms=elapsed_ms(started))
@@ -106,7 +161,7 @@ Return a concise technical RCA suitable for incident engineers.
         started = time.perf_counter()
         log_event(logger, logging.INFO, "gemini.rca.start", "Gemini RCA analysis started", model=self.model, evidence_items=len(evidence))
         try:
-            response = self.client.models.generate_content(model=self.model, contents=prompt, config=self._config(RCAResult))
+            response = self._generate_with_retry(contents=prompt, config=self._config(RCAResult))
             self._record_usage(response)
             result = RCAResult.model_validate_json(response.text)
             log_event(logger, logging.INFO, "gemini.rca.success", "Gemini RCA analysis completed", model=self.model, elapsed_ms=elapsed_ms(started), insufficient_evidence=result.insufficient_evidence)
@@ -152,8 +207,7 @@ RULES:
 """
         started = time.perf_counter()
         log_event(logger, logging.INFO, "gemini.agentic.plan.start", "Gemini agentic planning started", model=self.model, tools=len(available_tools), evidence_items=len(evidence))
-        response = self.client.models.generate_content(
-            model=self.model,
+        response = self._generate_with_retry(
             contents=prompt,
             config=self._config(AgenticDecision),
         )
@@ -188,7 +242,7 @@ TECHNICAL INVENTORY:
         started = time.perf_counter()
         log_event(logger, logging.INFO, "gemini.scope.start", "Gemini scope resolution started", model=self.model, inventory_size=len(technical_services))
         try:
-            response = self.client.models.generate_content(model=self.model, contents=prompt, config=self._config(ScopeResolution))
+            response = self._generate_with_retry(contents=prompt, config=self._config(ScopeResolution))
             self._record_usage(response)
             result = ScopeResolution.model_validate_json(response.text)
             log_event(logger, logging.INFO, "gemini.scope.success", "Gemini scope resolution completed", model=self.model, elapsed_ms=elapsed_ms(started), candidates=len(result.candidates), unresolved=result.unresolved)
