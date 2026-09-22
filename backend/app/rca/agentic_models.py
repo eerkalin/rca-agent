@@ -4,6 +4,10 @@ from pydantic import BaseModel, Field, model_validator
 class AgenticToolChoice(BaseModel):
     tool_key: str = Field(description="Exact tool key from the supplied available tool catalog")
     reason: str = Field(description="Why this tool is useful for the current investigation step")
+    arguments: dict = Field(
+        default_factory=dict,
+        description="Read-only arguments allowed by the selected tool descriptor",
+    )
 
 
 class AgenticDecision(BaseModel):
