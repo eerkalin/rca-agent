@@ -106,10 +106,25 @@ class RCAOrchestrator:
         return scope, candidates
 
     def _collect_kubernetes(self, db: Session, tool: dict, candidates: list, collect_all: bool) -> list[dict]:
-        if not candidates:
-            log_event(logger, logging.WARNING, "rca.kubernetes.no_candidates", "Kubernetes collection skipped because no scope candidate was resolved", tool_id=tool.get("id"))
-            return [{"tool": self._tool_descriptor(tool), "error": "Kubernetes scope resolver did not identify a technical candidate"}]
         provider = self._kubernetes_provider(db, tool)
+        if not candidates:
+            config = tool.get("config", {})
+            namespaces = list(config.get("namespaces") or [])
+            if not namespaces and config.get("namespace"):
+                namespaces = [config.get("namespace")]
+            if namespaces:
+                log_event(logger, logging.INFO, "rca.kubernetes.namespace_fallback", "No service candidate resolved; collecting namespace pod health", tool_id=tool.get("id"), namespaces=namespaces)
+                snapshot = self.evidence_collector.collect_namespace_health(
+                    kubernetes=provider,
+                    namespaces=namespaces,
+                )
+                return [{
+                    "tool": self._tool_descriptor(tool),
+                    "scope_candidate": {},
+                    "kubernetes": snapshot,
+                }]
+            log_event(logger, logging.WARNING, "rca.kubernetes.no_candidates", "Kubernetes collection skipped because no scope candidate and no namespace were resolved", tool_id=tool.get("id"))
+            return [{"tool": self._tool_descriptor(tool), "error": "Kubernetes scope resolver did not identify a technical candidate and the tool has no namespace scope"}]
         selected = candidates if collect_all else candidates[:1]
         evidence = []
         for candidate in selected:
