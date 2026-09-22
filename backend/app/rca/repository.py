@@ -100,6 +100,7 @@ class InvestigationRepository:
         input_tokens: int = 0,
         output_tokens: int = 0,
         total_tokens: int = 0,
+        token_usage_available: bool = False,
     ) -> None:
         investigation.llm_provider_type = provider_type
         investigation.llm_model = model
@@ -109,6 +110,7 @@ class InvestigationRepository:
             int(total_tokens or 0),
             investigation.llm_input_tokens + investigation.llm_output_tokens,
         )
+        investigation.llm_token_usage_available = bool(token_usage_available)
         db.commit()
 
     @staticmethod
@@ -134,6 +136,7 @@ class LLMInteractionRepository:
         output_tokens: int = 0,
         total_tokens: int = 0,
         duration_ms: int | None = None,
+        token_usage_available: bool = False,
     ) -> LLMInteraction:
         item = LLMInteraction(
             investigation_id=investigation_id,
@@ -148,6 +151,7 @@ class LLMInteractionRepository:
             output_tokens=max(0, int(output_tokens or 0)),
             total_tokens=max(int(total_tokens or 0), int(input_tokens or 0) + int(output_tokens or 0)),
             duration_ms=duration_ms,
+            token_usage_available=bool(token_usage_available),
         )
         db.add(item)
         db.commit()
