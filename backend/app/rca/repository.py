@@ -91,6 +91,27 @@ class InvestigationRepository:
         return db.get(Investigation, investigation_id)
 
     @staticmethod
+    def update_llm_usage(
+        db: Session,
+        investigation: Investigation,
+        *,
+        provider_type: str | None,
+        model: str | None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        total_tokens: int = 0,
+    ) -> None:
+        investigation.llm_provider_type = provider_type
+        investigation.llm_model = model
+        investigation.llm_input_tokens = max(0, int(input_tokens or 0))
+        investigation.llm_output_tokens = max(0, int(output_tokens or 0))
+        investigation.llm_total_tokens = max(
+            int(total_tokens or 0),
+            investigation.llm_input_tokens + investigation.llm_output_tokens,
+        )
+        db.commit()
+
+    @staticmethod
     def delete(db: Session, investigation: Investigation) -> None:
         db.delete(investigation)
         db.commit()
@@ -109,6 +130,10 @@ class LLMInteractionRepository:
         request_payload: dict,
         response_payload: dict | None = None,
         error: str | None = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        total_tokens: int = 0,
+        duration_ms: int | None = None,
     ) -> LLMInteraction:
         item = LLMInteraction(
             investigation_id=investigation_id,
@@ -119,6 +144,10 @@ class LLMInteractionRepository:
             request_payload=request_payload,
             response_payload=response_payload,
             error=error,
+            input_tokens=max(0, int(input_tokens or 0)),
+            output_tokens=max(0, int(output_tokens or 0)),
+            total_tokens=max(int(total_tokens or 0), int(input_tokens or 0) + int(output_tokens or 0)),
+            duration_ms=duration_ms,
         )
         db.add(item)
         db.commit()
