@@ -1,53 +1,342 @@
 # RCA Agent
 
-RCA Agent is an application-centric, read-only incident investigation service.
+RCA Agent is an application-centric, read-only incident investigation service for Kubernetes-hosted applications.
 
-## Core model
+It combines Application context, Kubernetes state, Prometheus-compatible metrics, Elasticsearch logs, Elastic APM traces, and an LLM-driven investigation loop to produce evidence-based incident answers and Root Cause Analysis (RCA).
 
-Every investigation belongs to an **Application**. An application defines which diagnostic tools, dependencies, and LLM are relevant to that system. Application configuration is stored in MySQL and is managed through the API/UI at runtime; investigated-application source configuration is not stored in Helm values, YAML files, or environment variables.
+The project is designed for generic Kubernetes environments. It is not tied to any specific Kubernetes distribution, cluster product, demo application, namespace naming convention, or observability deployment layout.
+
+## What RCA Agent does
+
+Each investigation belongs to an **Application**. An Application defines:
+
+- its name, slug, and human-readable description;
+- its investigation strategy;
+- which read-only diagnostic tools are enabled;
+- which Kubernetes namespaces are in scope;
+- semantic dependencies such as databases, queues, caches, and external services;
+- diagnostic bindings for those dependencies;
+- which LLM provider/model is used;
+- whether LLM request/response history should be retained by default.
+
+Application configuration is stored in MySQL and is managed at runtime through the API/UI. Application-specific settings are not hard-coded into Helm values or environment variables.
+
+## Architecture
+
+A typical investigation flow is:
+
+```text
+Manual investigation or Grafana webhook
+        ↓
+Application context
+        ↓
+Available read-only diagnostic tools
+        ↓
+LLM planning round
+        ↓
+tool + operation + arguments
+        ↓
+RCA Agent validates policy and executes the read-only operation
+        ↓
+observation returned to the LLM
+        ↓
+LLM decides whether more evidence is required
+        ↓
+additional planning rounds when needed
+        ↓
+final evidence-based answer / RCA / bounded 5 Why
+```
+
+The LLM controls the investigation strategy. RCA Agent controls what is allowed to execute.
+
+## Agentic investigation strategy
+
+The default `agentic` strategy is an LLM-driven read-only investigation loop.
+
+On every planning round, the LLM receives:
+
+- the user question or alert text;
+- the current Application context;
+- the Application description;
+- semantic dependencies and their descriptions;
+- enabled diagnostic bindings;
+- configured Kubernetes namespaces and safe diagnostic scope metadata;
+- the available read-only tools and their supported operations;
+- evidence collected so far;
+- signatures of already executed tool calls.
+
+The LLM then decides:
+
+1. whether the existing evidence is sufficient;
+2. which tool should be called next;
+3. which operation inside that tool should be used;
+4. which bounded arguments should be supplied;
+5. whether multiple independent observations can be requested in the same planning round.
+
+Tool descriptions can contain recommendations, but they are guidance rather than a hard-coded diagnostic workflow.
+
+A second strategy, `collect_then_analyze`, remains available for collecting configured evidence first and asking the LLM to analyze it afterward.
+
+## Application context supplied to the LLM
+
+The planning and final RCA prompts receive sanitized Application context such as:
+
+```json
+{
+  "application": {
+    "id": 1,
+    "name": "<application-name>",
+    "slug": "<application-slug>",
+    "description": "<business and technical purpose>",
+    "investigation_strategy": "agentic"
+  },
+  "enabled_diagnostic_bindings": [
+    {
+      "tool_type": "kubernetes",
+      "provider_type": "kubernetes",
+      "configured_scope": {
+        "namespaces": ["<application-namespace>"]
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "<dependency-name>",
+      "type": "<dependency-type>",
+      "description": "<why this dependency matters>",
+      "diagnostic_bindings": []
+    }
+  ]
+}
+```
+
+Credentials, passwords, API keys, encrypted secrets, LLM connection configuration, and other secret material are not included in LLM prompts.
+
+## Diagnostic providers
 
 Executable evidence providers currently implemented:
 
-- Kubernetes
-- Elasticsearch Logs
-- Prometheus Metrics
-- Elastic APM / Traces (read-only Elasticsearch-backed trace search)
+- **Kubernetes**
+- **Prometheus Metrics**
+- **Elasticsearch Logs**
+- **Elastic APM / Traces**
 
-Dependencies such as databases, Redis, Kafka or RabbitMQ are semantic Application context. RCA Agent does not connect directly to those systems. Their diagnostics should be exposed through Prometheus-compatible metrics (including PMM/exporter metrics) and bound to the dependency through a Prometheus tool.
+Grafana is supported as an alert/webhook trigger only. It is not a diagnostic evidence provider.
 
-## Safety
+### Kubernetes
 
-RCA execution is read-only. `app/rca/tool_policy.py` explicitly allowlists diagnostic operations. Mutating Kubernetes operations, generic remote shell execution, delete/patch/scale/restart operations, and write-capable Git/Argo/Terraform actions are not part of the RCA tool interface.
+A Kubernetes Application Tool is bound to a Kubernetes Connection and one or more allowed namespaces.
 
-Connection credentials are stored encrypted in `connections.credentials_ciphertext` using `RCA_MASTER_KEY`, are write-only in the UI, and are never included in evidence or LLM prompts.
+Supported connection modes:
 
-The Helm deployment creates a read-only Kubernetes ServiceAccount/ClusterRole. It grants only `get/list/watch` for inventory/log/event resources required by the current Kubernetes provider. It does not grant pod exec, create, patch, delete, scale, or other mutating permissions.
+- `in_cluster` — use the RCA Agent ServiceAccount;
+- `kubeconfig` — use an encrypted kubeconfig stored in MySQL.
+
+Current agentic Kubernetes operations include:
+
+- namespace health / pod readiness inspection;
+- exact pod diagnostics;
+- Service diagnostics;
+- bounded current/previous container logs;
+- Kubernetes events;
+- Service/endpoints/pod state used by the read-only collectors.
+
+The LLM chooses the operation. RCA Agent validates the namespace and operation against the configured Application scope before execution.
+
+### Prometheus
+
+Prometheus can be used for Application metrics and dependency diagnostics.
+
+The agent supports:
+
+- configured PromQL queries;
+- bounded read-only PromQL selected by the LLM during an agentic investigation.
+
+Dependencies such as databases, caches, Kafka-compatible brokers, RabbitMQ-compatible brokers, or other infrastructure should normally be observed through Prometheus-compatible exporters/PMM rather than direct database or broker access.
+
+### Elasticsearch Logs
+
+Elasticsearch transport/authentication settings live in a reusable Connection.
+
+Application Tool configuration controls:
+
+- index/data-stream pattern;
+- time field;
+- service/namespace fields;
+- lookback;
+- filters;
+- source/message fields;
+- bounded result size.
+
+RCA execution uses read-only search operations.
+
+### Elastic APM / Traces
+
+Elastic APM diagnostics read trace data from Elasticsearch-backed APM indices/data streams.
+
+Application Tool configuration can define:
+
+- trace index/data-stream pattern;
+- lookback;
+- service and namespace fields;
+- trace-id and outcome fields;
+- filters;
+- bounded candidate trace count;
+- bounded documents per trace.
+
+Full collected evidence is stored with the Investigation while reduced/bounded evidence is sent to the LLM.
+
+## Semantic dependencies
+
+Dependencies are part of the Application model.
+
+Examples include:
+
+- relational databases;
+- key/value stores;
+- message brokers;
+- downstream APIs;
+- internal microservices;
+- external services.
+
+A dependency contains a name, type, description, and optional diagnostic bindings.
+
+RCA Agent does not assume that a dependency is unhealthy merely because it exists in the Application context. The LLM must request evidence and support the conclusion.
+
+Direct database, Redis, Kafka, RabbitMQ, Git, Argo CD, or Terraform execution is not part of the current RCA tool interface.
+
+## LLM providers
+
+Each Application can select a reusable LLM Connection.
+
+Implemented provider types:
+
+- Google Gemini;
+- OpenAI;
+- Anthropic Claude;
+- OpenAI-compatible/local endpoints.
+
+Provider-level credentials are encrypted in MySQL. Application-level LLM settings can override model/temperature/output-token settings.
+
+If an OpenAI-compatible Connection points to Google's Gemini compatibility endpoint, RCA Agent routes it through the native Gemini provider.
+
+Transient LLM failures such as HTTP `429`, `500`, `502`, `503`, `504`, timeouts, and transport errors use bounded retry/backoff where supported.
+
+## RCA and 5 Why
+
+The final RCA is produced by the selected LLM.
+
+RCA Agent supplies:
+
+- the original user question/alert;
+- sanitized Application context;
+- reduced evidence collected by the tools.
+
+The LLM is responsible for formulating both the **Why question** and the **evidence-backed answer** for each 5 Why step.
+
+The model is instructed to:
+
+- use only supplied context and evidence;
+- distinguish observations, hypotheses, causes, and contributing factors;
+- stop the 5 Why chain when evidence is insufficient;
+- avoid fabricating missing levels;
+- return `root_cause = null` and `insufficient_evidence = true` when the cause cannot be proven.
+
+RCA Agent also normalizes common structured-output variations from generic/OpenAI-compatible models so that harmless schema drift does not automatically fail the whole Investigation.
+
+## Investigation history and metadata
+
+Each Investigation stores its current lifecycle and evidence in MySQL.
+
+The UI shows, when available:
+
+- status;
+- Application;
+- trigger type;
+- AI provider/model;
+- total token usage;
+- Investigation duration;
+- collected evidence;
+- agentic planning decisions;
+- final RCA;
+- error details.
+
+Token usage is shown only when the selected provider exposes usage metadata. A missing usage report is treated as unavailable, not as a fabricated token count.
+
+### Optional LLM request/response history
+
+LLM interaction history can be enabled:
+
+- by default at Application level;
+- per manual Investigation.
+
+When enabled, RCA Agent stores the sequence of LLM interactions, including:
+
+- planning phase;
+- sanitized request payload;
+- structured response;
+- provider/model;
+- per-call token usage when available;
+- call duration;
+- errors.
+
+When disabled, the request/response transcript is not stored, reducing MySQL storage usage.
+
+## Retry failed investigations
+
+A failed Investigation can be retried using the same Investigation ID.
+
+Retry resets the previous runtime result, error, evidence, token counters, and old LLM transcript for that execution, then queues the Investigation again.
+
+This is useful for transient provider errors without requiring creation of a duplicate Investigation.
+
+## Authentication and RBAC
+
+Local authentication is optional and MySQL-backed.
+
+Roles:
+
+- **Admin** — full read/write access, user administration, investigations, configuration;
+- **Investigator** — read access plus investigation execution and supported diagnostic/test actions;
+- **Read-only** — read-only access to available RCA Agent data.
+
+The **Users** UI/API is Admin-only.
+
+See [docs/AUTH.md](docs/AUTH.md) for authentication details.
 
 ## Web UI
 
-The UI manages Applications, Connections, Application Tools, dependencies, provider-specific settings, per-Application LLM selection, and encrypted credentials. Settings are persisted in MySQL and take effect without restarting RCA Agent.
+The built-in UI provides:
 
-## Per-Application LLM
+- Applications;
+- Application Overview / LLM / Tools / Dependencies;
+- Connections;
+- Investigations;
+- optional LLM interaction history;
+- Users for Admin accounts;
+- provider-specific forms and validation.
 
-Each Application may select its own reusable LLM Connection. Implemented provider types:
+The current RCA Agent application version is displayed in the UI.
 
-- Google Gemini
-- OpenAI
-- Anthropic Claude
-- OpenAI-compatible/local endpoints
+## Safety model
 
-LLM Connections store provider-level settings and encrypted API credentials. The Application stores `llm_connection_id` plus optional model/temperature/output-token overrides in `llm_config`. The selected LLM is used for both scope resolution and RCA analysis.
+RCA Agent is intentionally read-only.
 
-## Investigation strategies
+`app/rca/tool_policy.py` allowlists supported diagnostic operations.
 
-- `collect_then_analyze`: collect evidence from all configured Application and dependency tools, then analyze once.
-- `agentic`: process tools in priority order and stop expanding when the selected LLM reports sufficient evidence.
+The RCA tool interface does not expose:
 
-Full evidence is stored in MySQL; bounded/reduced evidence is sent to the LLM.
+- pod exec / arbitrary shell;
+- create/update/patch/delete;
+- scale/restart;
+- write-capable Git operations;
+- Argo CD mutations;
+- Terraform execution;
+- direct database mutations.
 
-## 5 Why RCA
+The Helm deployment creates a read-only Kubernetes ServiceAccount/ClusterRole with only the access required by the implemented Kubernetes diagnostics.
 
-RCA output includes a 5 Why chain only as far as supplied evidence supports it. The model is instructed not to fabricate missing levels or a root cause.
+Connection credentials are stored encrypted in `connections.credentials_ciphertext` using `RCA_MASTER_KEY`. Credentials are write-only in the UI and are not included in evidence or LLM prompts.
 
 ## Local development
 
@@ -62,28 +351,30 @@ alembic upgrade head
 fastapi dev app/main.py
 ```
 
-## Kubernetes / k3s deployment
+## Kubernetes deployment
 
-The repository includes `Dockerfile` and `helm/rca-agent` for running RCA Agent in the same k3s cluster as the investigated applications.
+The repository contains a `Dockerfile` and `helm/rca-agent` Helm chart for Kubernetes deployment.
 
-Recommended first-test topology:
+RCA Agent may run in the same Kubernetes cluster as investigated Applications or use configured kubeconfig Connections for other Kubernetes clusters.
+
+A generic deployment can contain:
 
 ```text
-namespace rca-agent
-  rca-agent API/UI
-  MySQL 8.4 StatefulSet + PVC
+namespace <rca-agent-namespace>
+  RCA Agent API/UI
+  MySQL StatefulSet + PVC
 
-namespace otel-demo
-  investigated application services
+namespace <application-namespace>
+  investigated Application workloads
 
-namespace observability
-  Prometheus
+<observability namespace(s)>
+  Prometheus-compatible metrics backend
   Elasticsearch / APM data
 ```
 
-### 1. Build and publish the image
+No specific namespace names or Kubernetes distribution are required.
 
-Build the image for the architecture used by the k3s node and push it to a registry reachable by the cluster:
+### 1. Build and publish the image
 
 ```bash
 docker build -t <registry>/rca-agent:<tag> .
@@ -92,9 +383,11 @@ docker push <registry>/rca-agent:<tag>
 
 For a private registry, configure `imagePullSecrets` in Helm values or on the ServiceAccount.
 
-### 2. Create namespace and bootstrap Secret
+The project also contains a GitHub Actions container publication workflow for GHCR.
 
-Helm values do not contain real credentials. Create the bootstrap Secret separately.
+### 2. Bootstrap secrets
+
+Helm values should not contain real credentials.
 
 Generate a Fernet key:
 
@@ -102,48 +395,58 @@ Generate a Fernet key:
 python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
 ```
 
-For release name `rca-agent`, the bundled MySQL Service is `rca-agent-mysql`.
+Example bootstrap:
 
 ```bash
-kubectl create namespace rca-agent
+kubectl create namespace <rca-agent-namespace>
 
-kubectl -n rca-agent create secret generic rca-agent-secrets \
+kubectl -n <rca-agent-namespace> create secret generic rca-agent-secrets \
   --from-literal=mysql-root-password='<root-password>' \
   --from-literal=mysql-password='<application-db-password>' \
   --from-literal=rca-master-key='<fernet-key>' \
   --from-literal=database-url='mysql+pymysql://rca_agent:<application-db-password>@rca-agent-mysql:3306/rca_agent?charset=utf8mb4'
 ```
 
-`RCA_MASTER_KEY` is bootstrap security material and must remain outside MySQL. Investigated-application credentials and LLM API keys are then entered through the UI and stored encrypted in MySQL.
+`RCA_MASTER_KEY` is bootstrap security material and must remain outside MySQL.
 
-Legacy Gemini Secret keys are optional. New Applications should create/select an LLM Connection in the UI instead.
+Application credentials and LLM API keys are entered later through the UI and stored encrypted.
 
-### 3. Install with Helm
+### 3. Install or upgrade with Helm
 
 ```bash
 helm upgrade --install rca-agent ./helm/rca-agent \
-  --namespace rca-agent \
+  --namespace <rca-agent-namespace> \
+  --create-namespace \
   --set image.repository=<registry>/rca-agent \
-  --set image.tag=<tag>
+  --set image.tag=<tag> \
+  --set auth.enabled=true
 ```
 
-The deployment initContainer waits for MySQL and runs `alembic upgrade head` before the API starts.
+The deployment initContainer waits for MySQL and runs:
 
-The MySQL StatefulSet uses a PVC for `/var/lib/mysql`. On k3s, leaving `mysql.persistence.storageClass` empty allows the cluster default StorageClass (commonly `local-path`) to be selected. Override it when required.
+```text
+alembic upgrade head
+```
 
-Check the rollout:
+before the API starts.
+
+The bundled MySQL StatefulSet uses persistent storage. Set the required `mysql.persistence.storageClass` for your Kubernetes environment when the cluster default is not appropriate.
+
+Check rollout status:
 
 ```bash
-kubectl get pods,pvc,svc -n rca-agent
-kubectl rollout status deployment/rca-agent -n rca-agent
+kubectl get pods,pvc,svc -n <rca-agent-namespace>
+kubectl rollout status deployment/rca-agent -n <rca-agent-namespace>
 ```
 
 ### 4. Open the UI
 
-The Service defaults to `ClusterIP`. For the first acceptance test, use port-forwarding:
+The Service defaults to `ClusterIP`.
+
+For local access:
 
 ```bash
-kubectl port-forward -n rca-agent svc/rca-agent 8000:80
+kubectl port-forward -n <rca-agent-namespace> svc/rca-agent 8000:80
 ```
 
 Open:
@@ -152,74 +455,80 @@ Open:
 http://127.0.0.1:8000/ui/
 ```
 
-If external access is required later, enable NodePort or Ingress in Helm values. Ingress is disabled by default.
+Ingress/NodePort can be enabled separately when required.
 
-## First `otel-demo` acceptance test
+## Generic first Application setup
 
-The first target Application is the existing `otel-demo` workload in the same k3s cluster.
+Create runtime objects through the UI rather than hard-coding an investigated Application into Helm:
 
-Create these objects through `/ui/`; do not add them to Helm values:
+1. Create an **Application** with a useful technical/business description.
+2. Select `agentic` or `collect_then_analyze`.
+3. Create/select an **LLM Connection**.
+4. Create a **Kubernetes Connection**.
+5. Add a **Kubernetes Tool** and explicitly configure the allowed namespace(s).
+6. Add a **Prometheus Connection** and Metrics Tool if metrics are available.
+7. Add **Elasticsearch Logs** and/or **Elastic APM** Connections/Tools when available.
+8. Add semantic **Dependencies** and describe their role in the Application.
+9. Bind dependency diagnostics through Prometheus-compatible metrics where appropriate.
+10. Optionally enable **Save LLM history** for debugging/validation of the agentic reasoning loop.
 
-1. **Application**: `otel-demo`.
-2. **LLM Connection**: Gemini/OpenAI/Anthropic/OpenAI-compatible, with API credential saved through the encrypted credentials form.
-3. **Kubernetes Connection**: mode `in_cluster`.
-4. **Kubernetes Tool**: bind that Connection to Application `otel-demo`, namespace `otel-demo`, and a bounded log tail such as 50 lines.
-5. **Prometheus Connection**: point to the Prometheus Service reachable from the `rca-agent` namespace, preferably its Kubernetes DNS name.
-6. **Metrics Tool**: add only the first small set of service-level PromQL queries needed for the test.
-7. **Elasticsearch Logs Connection** and Logs Tool.
-8. **Elastic APM Connection** and Traces Tool.
-9. Add dependencies such as PostgreSQL, Redis and Kafka as descriptive context. If they have exporter/PMM metrics, bind Prometheus queries to those dependencies. Do not create direct database, Redis, Kafka, or RabbitMQ connections.
+A controlled incident is recommended for the first end-to-end acceptance test so the collected evidence and LLM tool choices can be inspected safely.
 
-The initial end-to-end flow should be:
+## Grafana webhook trigger
 
-```text
-manual RCA or Grafana webhook
-        -> Application otel-demo
-        -> Kubernetes inventory/evidence
-        -> Prometheus metrics
-        -> Elasticsearch logs
-        -> Elastic APM traces
-        -> selected Application LLM
-        -> evidence-based RCA + bounded 5 Why
-```
+Grafana can create investigations through the webhook integration.
 
-Grafana is only a webhook trigger. It is not an investigation provider.
-
-Start with a controlled incident in one service and inspect which evidence the agent gathers before expanding PromQL/dependency coverage. This is intentionally the acceptance phase for the core observability loop; Git, Argo CD, Terraform, direct DB access, and automatic Logs-to-Traces correlation are out of scope for now.
-
-## Prometheus
-
-Prometheus transport settings live in the reusable Connection. PromQL query templates live in Application/Dependency tool configuration and may use context placeholders such as `{service_name}`, `{namespace}`, `{application_name}`, `{application_slug}`, `{dependency_name}`, and `{dependency_type}`.
-
-## Elasticsearch Logs
-
-Elasticsearch transport/authentication settings live in a reusable Connection. Index pattern, time field, service/namespace fields, lookback, filters and hit limits are Application tool settings. The provider exposes only `_search` to RCA orchestration.
-
-## Elastic APM / Traces
-
-Create a Connection with provider `elastic_apm` pointing at the Elasticsearch cluster that stores APM trace data. Authentication supports API key, bearer token, or basic auth and is stored encrypted.
-
-Application trace-tool settings are configured in the UI and persisted in MySQL. They include trace index/data-stream pattern, lookback, service/namespace/trace-id/outcome fields, optional filters, initial search size, trace limit, and documents-per-trace limit.
-
-The full trace evidence is stored with the investigation. Before sending evidence to the LLM, RCA Agent caps search hits, trace count, and documents per trace to control token usage.
-
-## Kubernetes runtime connections
-
-Kubernetes is application-scoped. A Kubernetes Application Tool references a Kubernetes Connection, and different Applications may reference different clusters.
-
-Supported modes:
-
-- `in_cluster`: RCA Agent uses its read-only ServiceAccount.
-- `kubeconfig`: encrypted kubeconfig is stored in MySQL and loaded only in backend memory.
-
-Namespace and log-tail settings remain Application Tool configuration.
+Grafana is only a trigger. Diagnostic evidence still comes from the Application's configured Kubernetes, Prometheus, Elasticsearch, and Elastic APM tools.
 
 ## Testing connections
 
-The UI exposes **Test** for Prometheus, Elasticsearch Logs, Elastic APM, Kubernetes and implemented LLM Connections:
+The UI exposes **Test** for implemented Connections.
+
+API form:
 
 ```text
 POST /api/v1/connections/{connection_id}/test
 ```
 
-Connection tests never reveal stored credentials.
+Connection tests do not return stored credentials.
+
+## Database migrations and upgrades
+
+RCA Agent uses Alembic for MySQL schema migrations.
+
+The Kubernetes deployment runs migrations before the API starts.
+
+For upgrade guidance see [docs/UPGRADES.md](docs/UPGRADES.md).
+
+For backend migration notes see [backend/migrations/README](backend/migrations/README).
+
+## Observability and logs
+
+RCA Agent emits structured backend logs for investigation lifecycle, provider calls, retries, tool execution, and failures.
+
+See [docs/LOGGING.md](docs/LOGGING.md).
+
+## Current scope
+
+Implemented core scope:
+
+- Application-centric configuration;
+- Kubernetes read-only diagnostics;
+- Prometheus metrics;
+- Elasticsearch logs;
+- Elastic APM traces;
+- LLM-driven agentic investigation;
+- evidence-based RCA and bounded 5 Why;
+- optional LLM interaction history;
+- token/model/duration metadata;
+- authentication and RBAC;
+- Helm/Kubernetes deployment.
+
+Currently intentionally out of scope:
+
+- direct database diagnostics;
+- native Redis/Kafka/RabbitMQ diagnostic protocols;
+- Git/Argo CD/Terraform investigation tools;
+- mutating/remediation actions;
+- arbitrary shell execution;
+- automatic Logs↔Traces correlation by trace ID.
