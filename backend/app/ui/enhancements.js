@@ -125,7 +125,7 @@ openApplicationEditor = async function(id=null) {
   const panel = document.createElement('div');
   panel.className = 'subpanel';
   panel.id = 'application-llm-panel';
-  panel.innerHTML = `<h2>LLM</h2><p class="hint">Choose the LLM used for scope resolution and RCA for this Application. Connection/API credentials are encrypted in MySQL.</p><div class="grid"><label>LLM connection<select id="app-llm-connection"><option value="">Legacy default Gemini</option>${llmConnections.map(c=>`<option value="${c.id}" ${c.id===app.llm_connection_id?'selected':''}>${esc(c.name)} · ${esc(provider(c.provider_type)?.label||c.provider_type)}</option>`).join('')}</select></label></div><div id="app-llm-fields" class="grid"></div><div class="actions"><button class="primary" id="save-app-llm">Save LLM settings</button></div>`;
+  panel.innerHTML = `<h2>LLM</h2><p class="hint">Choose the LLM used for scope resolution and RCA for this Application. Connection/API credentials are encrypted in MySQL.</p><div class="grid"><label>LLM connection<select id="app-llm-connection"><option value="">Legacy default Gemini</option>${llmConnections.map(c=>`<option value="${c.id}" ${c.id===app.llm_connection_id?'selected':''}>${esc(c.name)} · ${esc(provider(c.provider_type)?.label||c.provider_type)}</option>`).join('')}</select></label><label class="switch"><span><input id="app-save-llm-history" type="checkbox" ${app.llm_history_enabled?'checked':''}> Save LLM history by default</span><span class="hint field-help">If enabled, automatic investigations store request/response transcripts. Manual investigations can override this per run.</span></label></div><div id="app-llm-fields" class="grid"></div><div class="actions"><button class="primary" id="save-app-llm">Save LLM settings</button></div>`;
   const firstSubpanel = root.querySelector('.subpanel');
   if (firstSubpanel) root.insertBefore(panel, firstSubpanel); else root.appendChild(panel);
   const render = () => {
@@ -142,7 +142,11 @@ openApplicationEditor = async function(id=null) {
       const connection = connections.find(c => c.id === connectionId);
       const p = connection ? provider(connection.provider_type) : null;
       const config = p ? collectFields(qs('#app-llm-fields'), p.application_fields||[]) : {};
-      await api(`/applications/${id}`, {method:'PATCH', body:JSON.stringify({llm_connection_id: connectionId || null, llm_config: config})});
+      await api(`/applications/${id}`, {method:'PATCH', body:JSON.stringify({
+        llm_connection_id: connectionId || null,
+        llm_config: config,
+        llm_history_enabled: Boolean(qs('#app-save-llm-history').checked),
+      })});
       toast('Application LLM settings saved in MySQL');
       await refresh();
     } catch (e) { toast(e.message); }
