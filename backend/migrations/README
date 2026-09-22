@@ -1,1 +1,27 @@
-Generic single-database configuration.
+RCA Agent database migrations
+=============================
+
+This directory contains Alembic migrations for the RCA Agent MySQL schema.
+
+The schema stores runtime configuration and investigation data, including:
+
+- Applications;
+- Connections;
+- Application diagnostic tools;
+- semantic dependencies and dependency diagnostic bindings;
+- investigations and collected evidence;
+- optional LLM request/response history;
+- authentication/RBAC users and sessions.
+
+Apply the current schema with:
+
+    cd backend
+    alembic upgrade head
+
+The Kubernetes Helm deployment runs `alembic upgrade head` in an initContainer before the API starts.
+
+Do not edit an already-applied migration in a released deployment. Create a new Alembic revision for schema changes.
+
+For upgrade behavior and compatibility guidance, see:
+
+    ../../docs/UPGRADES.md
