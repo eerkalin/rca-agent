@@ -24,6 +24,11 @@ def upgrade() -> None:
         "investigations",
         sa.Column("llm_history_enabled", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
+    op.add_column("investigations", sa.Column("llm_provider_type", sa.String(length=64), nullable=True))
+    op.add_column("investigations", sa.Column("llm_model", sa.String(length=255), nullable=True))
+    op.add_column("investigations", sa.Column("llm_input_tokens", sa.Integer(), nullable=False, server_default="0"))
+    op.add_column("investigations", sa.Column("llm_output_tokens", sa.Integer(), nullable=False, server_default="0"))
+    op.add_column("investigations", sa.Column("llm_total_tokens", sa.Integer(), nullable=False, server_default="0"))
     op.create_table(
         "llm_interactions",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -35,6 +40,10 @@ def upgrade() -> None:
         sa.Column("request_payload", sa.JSON(), nullable=False),
         sa.Column("response_payload", sa.JSON(), nullable=True),
         sa.Column("error", sa.Text(), nullable=True),
+        sa.Column("input_tokens", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("output_tokens", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("total_tokens", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("duration_ms", sa.Integer(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
         sa.ForeignKeyConstraint(["investigation_id"], ["investigations.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -50,5 +59,10 @@ def downgrade() -> None:
     op.drop_index("ix_llm_interactions_phase", table_name="llm_interactions")
     op.drop_index("ix_llm_interactions_investigation_id", table_name="llm_interactions")
     op.drop_table("llm_interactions")
+    op.drop_column("investigations", "llm_total_tokens")
+    op.drop_column("investigations", "llm_output_tokens")
+    op.drop_column("investigations", "llm_input_tokens")
+    op.drop_column("investigations", "llm_model")
+    op.drop_column("investigations", "llm_provider_type")
     op.drop_column("investigations", "llm_history_enabled")
     op.drop_column("applications", "llm_history_enabled")
