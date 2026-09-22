@@ -44,6 +44,10 @@ class EvidenceReducer:
                         "node_name": pod.get("node_name"),
                         "conditions": pod.get("conditions", []),
                         "containers": pod.get("containers", []),
+                        "health_reasons": pod.get("health_reasons", []),
+                        "desired_container_count": pod.get("desired_container_count"),
+                        "status_container_count": pod.get("status_container_count"),
+                        "ready_container_count": pod.get("ready_container_count"),
                         "events": pod.get("events", [])[-cls.MAX_EVENTS_PER_POD :],
                     })
                 namespaces.append({
