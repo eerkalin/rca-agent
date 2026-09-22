@@ -27,12 +27,13 @@ class GeminiProvider:
         self.model = application_config.get("model") or config.get("model") or settings.gemini_model
         self.temperature = float(application_config.get("temperature", config.get("temperature", 0.1)))
         self.max_output_tokens = application_config.get("max_output_tokens") or config.get("max_output_tokens")
-        self.usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        self.usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "available": False}
 
     def _record_usage(self, response) -> None:
         metadata = getattr(response, "usage_metadata", None)
         if metadata is None:
             return
+        self.usage_totals["available"] = True
         input_tokens = int(
             getattr(metadata, "prompt_token_count", 0)
             or getattr(metadata, "input_token_count", 0)
