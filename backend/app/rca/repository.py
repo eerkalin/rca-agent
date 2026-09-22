@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models.investigation import Investigation
+from app.db.models.investigation import Investigation, LLMInteraction
 
 
 class InvestigationRepository:
@@ -14,6 +14,7 @@ class InvestigationRepository:
         trigger_type: str,
         query: str,
         alert_id: int | None = None,
+        llm_history_enabled: bool = False,
     ) -> Investigation:
         investigation = Investigation(
             application_id=application_id,
@@ -21,6 +22,7 @@ class InvestigationRepository:
             trigger_type=trigger_type,
             query=query,
             status="queued",
+            llm_history_enabled=llm_history_enabled,
         )
         db.add(investigation)
         db.commit()
@@ -92,3 +94,42 @@ class InvestigationRepository:
     def delete(db: Session, investigation: Investigation) -> None:
         db.delete(investigation)
         db.commit()
+
+
+class LLMInteractionRepository:
+    @staticmethod
+    def append(
+        db: Session,
+        *,
+        investigation_id: int,
+        sequence: int,
+        phase: str,
+        provider_type: str | None,
+        model: str | None,
+        request_payload: dict,
+        response_payload: dict | None = None,
+        error: str | None = None,
+    ) -> LLMInteraction:
+        item = LLMInteraction(
+            investigation_id=investigation_id,
+            sequence=sequence,
+            phase=phase,
+            provider_type=provider_type,
+            model=model,
+            request_payload=request_payload,
+            response_payload=response_payload,
+            error=error,
+        )
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+        return item
+
+    @staticmethod
+    def list_for_investigation(db: Session, investigation_id: int) -> list[LLMInteraction]:
+        statement = (
+            select(LLMInteraction)
+            .where(LLMInteraction.investigation_id == investigation_id)
+            .order_by(LLMInteraction.sequence, LLMInteraction.id)
+        )
+        return list(db.scalars(statement).all())
