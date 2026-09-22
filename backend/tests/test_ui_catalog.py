@@ -85,3 +85,21 @@ def test_ui_auth_relogin_and_visual_shell_contract():
     assert "--surface:" in styles
     assert "backdrop-filter" in styles
     assert ".tile-grid" in styles
+
+
+def test_top_navigation_resets_nested_detail_views():
+    ui_dir = Path(__file__).resolve().parents[1] / "app" / "ui"
+    app_js = (ui_dir / "app.js").read_text()
+    assert "function resetViewDetailState" in app_js
+    assert "closeApplicationDetail" in app_js
+    assert "closeConnectionDetail" in app_js
+    assert "investigation-detail" in app_js
+
+
+def test_premium_navigation_uses_svg_icons():
+    ui_dir = Path(__file__).resolve().parents[1] / "app" / "ui"
+    index_html = (ui_dir / "index.html").read_text()
+    styles = (ui_dir / "styles.css").read_text()
+    assert 'class="nav-icon" aria-hidden="true"><svg' in index_html
+    assert ".nav-icon svg" in styles
+    assert "Premium shell v2" in styles
