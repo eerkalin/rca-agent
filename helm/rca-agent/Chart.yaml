@@ -2,5 +2,5 @@ apiVersion: v2
 name: rca-agent
 description: Application-centric read-only RCA Agent
 version: 0.1.0
-appVersion: "0.7.0"
+appVersion: "0.8.0"
 type: application

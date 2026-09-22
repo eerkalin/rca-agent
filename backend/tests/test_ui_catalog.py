@@ -110,8 +110,8 @@ def test_ui_assets_are_cache_busted_and_icons_are_hard_sized():
     index_html = (ui_dir / "index.html").read_text()
     styles = (ui_dir / "styles.css").read_text()
 
-    assert "/ui/styles.css?v=20260922-3" in index_html
-    assert "/ui/app.js?v=20260922-3" in index_html
+    assert "/ui/styles.css?v=20260922-4" in index_html
+    assert "/ui/app.js?v=20260922-4" in index_html
     assert 'width="24" height="24"' in index_html
     assert 'width="17" height="17"' in index_html
     assert "Premium workspace v3" in styles

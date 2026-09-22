@@ -6,5 +6,5 @@ from app.db.models.application import (
     Connection,
     DependencyTool,
 )
-from app.db.models.investigation import Investigation
+from app.db.models.investigation import Investigation, LLMInteraction
 from app.db.models.user import User

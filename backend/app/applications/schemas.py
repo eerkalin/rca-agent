@@ -11,6 +11,7 @@ class ApplicationCreate(BaseModel):
     investigation_strategy: str = Field(default="agentic", pattern=r"^(agentic|collect_then_analyze)$")
     llm_connection_id: int | None = None
     llm_config: dict[str, Any] = Field(default_factory=dict)
+    llm_history_enabled: bool = False
 
 
 class ApplicationUpdate(BaseModel):
@@ -21,6 +22,7 @@ class ApplicationUpdate(BaseModel):
     investigation_strategy: str | None = Field(default=None, pattern=r"^(agentic|collect_then_analyze)$")
     llm_connection_id: int | None = None
     llm_config: dict[str, Any] | None = None
+    llm_history_enabled: bool | None = None
 
 
 class ConnectionCreate(BaseModel):

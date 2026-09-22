@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models.investigation import Investigation
+from app.db.models.investigation import Investigation, LLMInteraction
 
 
 class InvestigationRepository:
@@ -14,6 +14,7 @@ class InvestigationRepository:
         trigger_type: str,
         query: str,
         alert_id: int | None = None,
+        llm_history_enabled: bool = False,
     ) -> Investigation:
         investigation = Investigation(
             application_id=application_id,
@@ -21,6 +22,7 @@ class InvestigationRepository:
             trigger_type=trigger_type,
             query=query,
             status="queued",
+            llm_history_enabled=llm_history_enabled,
         )
         db.add(investigation)
         db.commit()
@@ -89,6 +91,78 @@ class InvestigationRepository:
         return db.get(Investigation, investigation_id)
 
     @staticmethod
+    def update_llm_usage(
+        db: Session,
+        investigation: Investigation,
+        *,
+        provider_type: str | None,
+        model: str | None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        total_tokens: int = 0,
+        token_usage_available: bool = False,
+    ) -> None:
+        investigation.llm_provider_type = provider_type
+        investigation.llm_model = model
+        investigation.llm_input_tokens = max(0, int(input_tokens or 0))
+        investigation.llm_output_tokens = max(0, int(output_tokens or 0))
+        investigation.llm_total_tokens = max(
+            int(total_tokens or 0),
+            investigation.llm_input_tokens + investigation.llm_output_tokens,
+        )
+        investigation.llm_token_usage_available = bool(token_usage_available)
+        db.commit()
+
+    @staticmethod
     def delete(db: Session, investigation: Investigation) -> None:
         db.delete(investigation)
         db.commit()
+
+
+class LLMInteractionRepository:
+    @staticmethod
+    def append(
+        db: Session,
+        *,
+        investigation_id: int,
+        sequence: int,
+        phase: str,
+        provider_type: str | None,
+        model: str | None,
+        request_payload: dict,
+        response_payload: dict | None = None,
+        error: str | None = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        total_tokens: int = 0,
+        duration_ms: int | None = None,
+        token_usage_available: bool = False,
+    ) -> LLMInteraction:
+        item = LLMInteraction(
+            investigation_id=investigation_id,
+            sequence=sequence,
+            phase=phase,
+            provider_type=provider_type,
+            model=model,
+            request_payload=request_payload,
+            response_payload=response_payload,
+            error=error,
+            input_tokens=max(0, int(input_tokens or 0)),
+            output_tokens=max(0, int(output_tokens or 0)),
+            total_tokens=max(int(total_tokens or 0), int(input_tokens or 0) + int(output_tokens or 0)),
+            duration_ms=duration_ms,
+            token_usage_available=bool(token_usage_available),
+        )
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+        return item
+
+    @staticmethod
+    def list_for_investigation(db: Session, investigation_id: int) -> list[LLMInteraction]:
+        statement = (
+            select(LLMInteraction)
+            .where(LLMInteraction.investigation_id == investigation_id)
+            .order_by(LLMInteraction.sequence, LLMInteraction.id)
+        )
+        return list(db.scalars(statement).all())

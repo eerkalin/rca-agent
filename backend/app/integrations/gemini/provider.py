@@ -7,6 +7,7 @@ from google.genai import types
 
 from app.config import settings
 from app.observability.logging import elapsed_ms, log_event
+from app.rca.agentic_models import AgenticDecision
 from app.rca.rca_models import RCAResult
 from app.rca.scope_models import ScopeResolution
 
@@ -26,12 +27,34 @@ class GeminiProvider:
         self.model = application_config.get("model") or config.get("model") or settings.gemini_model
         self.temperature = float(application_config.get("temperature", config.get("temperature", 0.1)))
         self.max_output_tokens = application_config.get("max_output_tokens") or config.get("max_output_tokens")
+        self.usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "available": False}
+
+    def _record_usage(self, response) -> None:
+        metadata = getattr(response, "usage_metadata", None)
+        if metadata is None:
+            return
+        self.usage_totals["available"] = True
+        input_tokens = int(
+            getattr(metadata, "prompt_token_count", 0)
+            or getattr(metadata, "input_token_count", 0)
+            or 0
+        )
+        output_tokens = int(
+            getattr(metadata, "candidates_token_count", 0)
+            or getattr(metadata, "output_token_count", 0)
+            or 0
+        )
+        total_tokens = int(getattr(metadata, "total_token_count", 0) or (input_tokens + output_tokens))
+        self.usage_totals["input_tokens"] += max(0, input_tokens)
+        self.usage_totals["output_tokens"] += max(0, output_tokens)
+        self.usage_totals["total_tokens"] += max(total_tokens, input_tokens + output_tokens)
 
     def test_connection(self) -> dict:
         started = time.perf_counter()
         log_event(logger, logging.INFO, "gemini.test.start", "Gemini connection test started", model=self.model)
         try:
             response = self.client.models.generate_content(model=self.model, contents="Reply only with OK")
+            self._record_usage(response)
             result = {"connected": True, "provider": "gemini", "model": self.model, "response": response.text}
             log_event(logger, logging.INFO, "gemini.test.success", "Gemini connection test completed", model=self.model, elapsed_ms=elapsed_ms(started))
             return result
@@ -84,6 +107,7 @@ Return a concise technical RCA suitable for incident engineers.
         log_event(logger, logging.INFO, "gemini.rca.start", "Gemini RCA analysis started", model=self.model, evidence_items=len(evidence))
         try:
             response = self.client.models.generate_content(model=self.model, contents=prompt, config=self._config(RCAResult))
+            self._record_usage(response)
             result = RCAResult.model_validate_json(response.text)
             log_event(logger, logging.INFO, "gemini.rca.success", "Gemini RCA analysis completed", model=self.model, elapsed_ms=elapsed_ms(started), insufficient_evidence=result.insufficient_evidence)
             return result
@@ -91,6 +115,52 @@ Return a concise technical RCA suitable for incident engineers.
             log_event(logger, logging.ERROR, "gemini.rca.failure", "Gemini RCA analysis failed", model=self.model, elapsed_ms=elapsed_ms(started), error_type=type(exc).__name__, error=str(exc))
             logger.exception("Gemini RCA analysis failed model=%s", self.model)
             raise
+
+    def plan_next_tools(
+        self,
+        *,
+        symptom: str,
+        available_tools: list[dict],
+        evidence: list[dict],
+        executed_tool_keys: list[str],
+    ) -> AgenticDecision:
+        prompt = f"""
+You are the planning loop of a READ-ONLY RCA agent.
+
+USER SYMPTOM:
+{symptom}
+
+AVAILABLE TOOLS:
+{json.dumps(available_tools, ensure_ascii=False, default=str)}
+
+EVIDENCE COLLECTED SO FAR:
+{json.dumps(evidence, ensure_ascii=False, default=str)}
+
+ALREADY EXECUTED TOOL SIGNATURES:
+{json.dumps(executed_tool_keys, ensure_ascii=False)}
+
+RULES:
+1. Choose only exact tool_key values from AVAILABLE TOOLS.
+2. Never invent tools or mutating actions.
+3. Prefer the smallest set of high-value observations that can answer the question.
+4. You may select multiple independent tools in one round and set parallel=true.
+5. Use arguments only when described by the selected tool.
+6. Do not repeat the same tool with the same arguments.
+7. If evidence is sufficient to answer the symptom, set stop=true.
+8. If there is no evidence yet, do not stop unless the question is answerable from Application context alone.
+9. For Kubernetes readiness/health questions, first inspect namespace health. If a problematic pod is found, pod diagnostics can then retrieve its events/logs.
+"""
+        started = time.perf_counter()
+        log_event(logger, logging.INFO, "gemini.agentic.plan.start", "Gemini agentic planning started", model=self.model, tools=len(available_tools), evidence_items=len(evidence))
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=prompt,
+            config=self._config(AgenticDecision),
+        )
+        self._record_usage(response)
+        result = AgenticDecision.model_validate_json(response.text)
+        log_event(logger, logging.INFO, "gemini.agentic.plan.success", "Gemini agentic planning completed", model=self.model, elapsed_ms=elapsed_ms(started), stop=result.stop, choices=len(result.choices))
+        return result
 
     def resolve_scope(self, alert_text: str, technical_services: list[dict]) -> ScopeResolution:
         inventory_json = json.dumps(technical_services, ensure_ascii=False)
@@ -119,6 +189,7 @@ TECHNICAL INVENTORY:
         log_event(logger, logging.INFO, "gemini.scope.start", "Gemini scope resolution started", model=self.model, inventory_size=len(technical_services))
         try:
             response = self.client.models.generate_content(model=self.model, contents=prompt, config=self._config(ScopeResolution))
+            self._record_usage(response)
             result = ScopeResolution.model_validate_json(response.text)
             log_event(logger, logging.INFO, "gemini.scope.success", "Gemini scope resolution completed", model=self.model, elapsed_ms=elapsed_ms(started), candidates=len(result.candidates), unresolved=result.unresolved)
             return result

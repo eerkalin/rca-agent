@@ -2,7 +2,7 @@ from app.db import schema_compat
 
 
 def test_expected_head_revision_is_current_release_head():
-    assert schema_compat.expected_head_revisions() == {"f4a5b6c7d8e9"}
+    assert schema_compat.expected_head_revisions() == {"g5b6c7d8e9f0"}
 
 
 def test_schema_status_reports_current(monkeypatch):

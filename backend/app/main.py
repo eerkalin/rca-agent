@@ -25,12 +25,13 @@ from app.config import settings
 from app.db.schema_compat import assert_schema_current, schema_status
 from app.db.session import SessionLocal, engine
 from app.observability.logging import configure_logging, elapsed_ms, log_event, set_request_id
+from app.version import APP_VERSION
 
 
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="RCA Agent", version="0.7.0")
+app = FastAPI(title="RCA Agent", version=APP_VERSION)
 app.middleware("http")(auth_rbac_middleware)
 
 
@@ -127,7 +128,7 @@ async def health():
     return {
         "status": "ok",
         "service": "rca-agent",
-        "version": "0.7.0",
+        "version": APP_VERSION,
         "auth_enabled": settings.auth_enabled,
     }
 

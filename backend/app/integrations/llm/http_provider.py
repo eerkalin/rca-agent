@@ -7,6 +7,7 @@ import time
 import httpx
 
 from app.observability.logging import elapsed_ms, log_event, sanitize_url
+from app.rca.agentic_models import AgenticDecision
 from app.rca.rca_models import RCAResult
 from app.rca.scope_models import ScopeResolution
 
@@ -24,6 +25,18 @@ class BaseHTTPLLMProvider:
             raise ValueError("LLM provider requires a model")
         self.temperature = float(self.application_config.get("temperature", self.config.get("temperature", 0.1)))
         self.timeout = float(self.config.get("timeout_seconds", 60))
+        self.usage_totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "available": False}
+
+    def _record_usage(self, usage: dict | None) -> None:
+        if not isinstance(usage, dict) or not usage:
+            return
+        input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+        total_tokens = int(usage.get("total_tokens") or (input_tokens + output_tokens))
+        self.usage_totals["available"] = True
+        self.usage_totals["input_tokens"] += max(0, input_tokens)
+        self.usage_totals["output_tokens"] += max(0, output_tokens)
+        self.usage_totals["total_tokens"] += max(total_tokens, input_tokens + output_tokens)
 
     @staticmethod
     def _rca_prompt(symptom: str, evidence: list[dict], application_context: dict) -> str:
@@ -104,6 +117,42 @@ TECHNICAL INVENTORY:
         log_event(logger, logging.INFO, "llm.rca.success", "LLM RCA analysis completed", provider=self.config.get("provider_type"), model=self.model, elapsed_ms=elapsed_ms(started), insufficient_evidence=result.insufficient_evidence)
         return result
 
+    def plan_next_tools(
+        self,
+        *,
+        symptom: str,
+        available_tools: list[dict],
+        evidence: list[dict],
+        executed_tool_keys: list[str],
+    ) -> AgenticDecision:
+        prompt = f"""You are the planning loop of a READ-ONLY RCA agent.
+
+USER SYMPTOM:
+{symptom}
+
+AVAILABLE TOOLS:
+{json.dumps(available_tools, ensure_ascii=False, default=str)}
+
+EVIDENCE COLLECTED SO FAR:
+{json.dumps(evidence, ensure_ascii=False, default=str)}
+
+ALREADY EXECUTED TOOL SIGNATURES:
+{json.dumps(executed_tool_keys, ensure_ascii=False)}
+
+RULES:
+1. Choose only exact tool_key values from AVAILABLE TOOLS.
+2. Never invent tools or mutating actions.
+3. Arguments must obey the selected tool descriptor.
+4. Prefer the smallest set of high-value observations.
+5. You may choose multiple independent tools in the same round and set parallel=true.
+6. Do not repeat the same tool with the same arguments.
+7. If evidence is sufficient to answer the symptom, set stop=true.
+8. If no evidence has been collected, do not stop unless Application context alone answers the question.
+9. For Kubernetes readiness/health questions, inspect namespace health first. If a problematic pod is found, pod diagnostics can then retrieve events/logs.
+Return JSON only, matching the agentic decision schema."""
+        text = self._generate_json(prompt, "agentic_decision")
+        return AgenticDecision.model_validate_json(text)
+
     def resolve_scope(self, alert_text: str, technical_services: list[dict]) -> ScopeResolution:
         started = time.perf_counter()
         log_event(logger, logging.INFO, "llm.scope.start", "LLM scope resolution started", provider=self.config.get("provider_type"), model=self.model, inventory_size=len(technical_services))
@@ -138,6 +187,7 @@ class OpenAICompatibleProvider(BaseHTTPLLMProvider):
                 status_code = response.status_code
                 response.raise_for_status()
                 payload = response.json()
+            self._record_usage(payload.get("usage"))
             log_event(logger, logging.INFO, "llm.http.response", "LLM HTTP request completed", provider=self.config.get("provider_type"), model=self.model, method="POST", endpoint=sanitize_url(endpoint), status_code=status_code, elapsed_ms=elapsed_ms(started), schema_name=schema_name)
             return payload["choices"][0]["message"]["content"]
         except Exception as exc:
@@ -166,6 +216,7 @@ class AnthropicProvider(BaseHTTPLLMProvider):
                 status_code = response.status_code
                 response.raise_for_status()
                 payload = response.json()
+            self._record_usage(payload.get("usage"))
             log_event(logger, logging.INFO, "llm.http.response", "Anthropic HTTP request completed", provider="anthropic", model=self.model, method="POST", endpoint=sanitize_url(endpoint), status_code=status_code, elapsed_ms=elapsed_ms(started), schema_name=schema_name)
         except Exception as exc:
             status_code = getattr(getattr(exc, "response", None), "status_code", None)

@@ -33,6 +33,33 @@ class EvidenceReducer:
     def _reduce_kubernetes(cls, item: dict) -> dict:
         kubernetes = item.get("kubernetes", {})
 
+        if kubernetes.get("scope") == "pod_diagnostics":
+            pod = kubernetes.get("pod") or {}
+            logs = {}
+            for container_name, container_logs in (kubernetes.get("logs") or {}).items():
+                logs[container_name] = {
+                    "current": cls._compact_log(container_logs.get("current")),
+                    "previous": cls._compact_log(container_logs.get("previous")),
+                }
+            return {
+                "scope": "pod_diagnostics",
+                "namespace": kubernetes.get("namespace"),
+                "pod_name": kubernetes.get("pod_name"),
+                "found": kubernetes.get("found"),
+                "pod": {
+                    "name": pod.get("name"),
+                    "phase": pod.get("phase"),
+                    "node_name": pod.get("node_name"),
+                    "conditions": pod.get("conditions", []),
+                    "containers": pod.get("containers", []),
+                    "desired_container_count": pod.get("desired_container_count"),
+                    "ready_container_count": pod.get("ready_container_count"),
+                } if pod else None,
+                "events": (kubernetes.get("events") or [])[-cls.MAX_EVENTS_PER_POD :],
+                "events_error": kubernetes.get("events_error"),
+                "logs": logs,
+            }
+
         if kubernetes.get("scope") == "namespace_health":
             namespaces = []
             for namespace in kubernetes.get("namespaces", []):
@@ -44,6 +71,10 @@ class EvidenceReducer:
                         "node_name": pod.get("node_name"),
                         "conditions": pod.get("conditions", []),
                         "containers": pod.get("containers", []),
+                        "health_reasons": pod.get("health_reasons", []),
+                        "desired_container_count": pod.get("desired_container_count"),
+                        "status_container_count": pod.get("status_container_count"),
+                        "ready_container_count": pod.get("ready_container_count"),
                         "events": pod.get("events", [])[-cls.MAX_EVENTS_PER_POD :],
                     })
                 namespaces.append({

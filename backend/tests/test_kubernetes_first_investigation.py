@@ -91,3 +91,46 @@ def test_namespace_health_reducer_preserves_complete_zero_problem_count():
     assert reduced[0]["kubernetes"]["problem_pods_count"] == 0
     assert reduced[0]["kubernetes"]["namespaces"][0]["problem_pods_count"] == 0
     assert reduced[0]["kubernetes"]["namespaces"][0]["truncated"] is False
+
+
+class FakeOOMKubernetes:
+    def list_pods_for_selector(self, namespace, selector=None):
+        return [{
+            "name": "payment-oom",
+            "namespace": namespace,
+            "phase": "Running",
+            "conditions": [{"type": "Ready", "status": "False", "reason": "ContainersNotReady", "message": "container not ready"}],
+            "containers": [{
+                "name": "payment",
+                "ready": False,
+                "restart_count": 4,
+                "state": "terminated",
+                "reason": "OOMKilled",
+                "last_state": "terminated",
+                "last_reason": "OOMKilled",
+                "last_exit_code": 137,
+            }],
+            "desired_containers": ["payment"],
+            "desired_container_count": 1,
+            "status_container_count": 1,
+            "ready_container_count": 0,
+            "deletion_timestamp": None,
+        }]
+
+    def get_events_for_resource(self, namespace, resource_name):
+        return [{"type": "Warning", "reason": "OOMKilled", "message": "Container exceeded memory limit"}]
+
+
+def test_namespace_health_flags_zero_ready_oomkilled_pod():
+    result = EvidenceCollector().collect_namespace_health(
+        kubernetes=FakeOOMKubernetes(),
+        namespaces=["otel-demo"],
+    )
+
+    assert result["total_pods"] == 1
+    assert result["problem_pods_count"] == 1
+    pod = result["namespaces"][0]["problem_pods"][0]
+    assert pod["name"] == "payment-oom"
+    assert pod["ready_container_count"] == 0
+    assert any("0/1" in reason for reason in pod["health_reasons"])
+    assert any("OOMKilled" in reason for reason in pod["health_reasons"])

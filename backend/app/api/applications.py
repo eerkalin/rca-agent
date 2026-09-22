@@ -57,6 +57,7 @@ def _application(item) -> dict:
         "investigation_strategy": item.investigation_strategy,
         "llm_connection_id": item.llm_connection_id,
         "llm_config": item.llm_config or {},
+        "llm_history_enabled": bool(item.llm_history_enabled),
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     }

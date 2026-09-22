@@ -63,6 +63,11 @@ function applyRoleControls() {
   qs('#new-connection')?.classList.toggle('hidden', !admin);
   qs('#new-investigation')?.classList.toggle('hidden', !(admin || investigator));
   qs('#users-nav')?.classList.toggle('hidden', !admin || !authState.enabled);
+  if (!admin && !qs('#users-view')?.classList.contains('hidden')) {
+    qs('#users-view')?.classList.add('hidden');
+    qs('#applications-view')?.classList.remove('hidden');
+    document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === 'applications'));
+  }
 
   document.querySelectorAll('#applications-view button.danger,#connections-view button.danger')
     .forEach(button => button.classList.toggle('hidden', !admin));
@@ -150,6 +155,8 @@ function renderSession() {
 
 async function loadAuthState() {
   const health = await fetch(`${API}/health`, {credentials:'same-origin', cache:'no-store'}).then(response => response.json());
+  const versionNode = qs('#app-version');
+  if (versionNode) versionNode.textContent = `v${health.version || '—'}`;
   if (!health.auth_enabled) {
     authState = {enabled:false, user:null, role:'admin'};
     hideLogin();
