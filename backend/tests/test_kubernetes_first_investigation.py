@@ -1,4 +1,5 @@
 from app.rca.evidence_collector import EvidenceCollector
+from app.rca.rca_models import RCAResult
 from app.rca.scope_models import ScopeResolution
 
 
@@ -50,3 +51,15 @@ def test_namespace_health_reports_only_problem_pods_with_events():
     assert result["namespaces"][0]["problem_pods"][0]["name"] == "broken-1"
     assert result["namespaces"][0]["problem_pods"][0]["events"][0]["reason"] == "BackOff"
     assert kubernetes.events == [("otel-demo", "broken-1")]
+
+
+def test_partial_rca_response_degrades_to_insufficient_evidence_instead_of_failing():
+    result = RCAResult.model_validate({"summary": "Недостаточно данных для подтвержденной причины."})
+
+    assert result.summary
+    assert result.five_whys == []
+    assert result.probable_causes == []
+    assert result.recommended_checks == []
+    assert result.recommended_actions == []
+    assert result.limitations == []
+    assert result.insufficient_evidence is True
