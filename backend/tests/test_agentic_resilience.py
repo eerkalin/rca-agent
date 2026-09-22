@@ -52,9 +52,62 @@ def test_agentic_decision_accepts_tool_operation_aliases():
 
     assert decision.stop is False
     assert decision.choices[0].tool_key == "application:1"
-    assert decision.choices[0].arguments == {
+    assert decision.choices[0].arguments_dict() == {
+        "operation": "pod_diagnostics",
         "namespace": "otel-demo",
         "pod_name": "payment-abc",
-        "operation": "pod_diagnostics",
     }
     assert decision.choices[0].reason == "Inspect the unhealthy pod."
+
+
+
+def test_agentic_decision_schema_has_no_additional_properties_for_gemini_developer_api():
+    schema = AgenticDecision.model_json_schema()
+
+    def assert_no_additional_properties(value):
+        if isinstance(value, dict):
+            assert "additionalProperties" not in value
+            for child in value.values():
+                assert_no_additional_properties(child)
+        elif isinstance(value, list):
+            for child in value:
+                assert_no_additional_properties(child)
+
+    assert_no_additional_properties(schema)
+
+    arguments_schema = schema["$defs"]["AgenticToolArguments"]
+    assert set(arguments_schema["properties"]) == {
+        "operation",
+        "namespace",
+        "pod_name",
+        "service_name",
+        "promql",
+        "mode",
+        "window_minutes",
+        "step",
+        "search_text",
+        "lookback_minutes",
+        "size",
+    }
+
+
+def test_agentic_arguments_drop_unknown_fields_before_execution():
+    decision = AgenticDecision.model_validate({
+        "choices": [{
+            "tool_key": "application:1",
+            "reason": "Inspect pod",
+            "arguments": {
+                "operation": "pod_diagnostics",
+                "namespace": "application",
+                "pod_name": "pod-1",
+                "delete_pod": True,
+                "shell": "rm -rf /",
+            },
+        }]
+    })
+
+    assert decision.choices[0].arguments_dict() == {
+        "operation": "pod_diagnostics",
+        "namespace": "application",
+        "pod_name": "pod-1",
+    }
