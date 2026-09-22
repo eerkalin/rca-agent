@@ -129,7 +129,7 @@ STRICT RULES:
 4. Distinguish observations, hypotheses, root cause and contributing factors.
 5. A healthy infrastructure object does not prove a healthy business transaction.
 6. Correlation is not automatically causation.
-7. Build a 5 Why chain only as far as evidence supports it; never fabricate levels.
+7. You, the LLM, must formulate both the Why question and its evidence-backed answer. RCA Agent never writes the 5 Why chain for you. Build only as many levels as evidence supports; never fabricate levels.
 8. If root cause cannot be proven, root_cause must be null and insufficient_evidence=true.
 9. Dependencies are context only unless evidence proves failure.
 10. Keep evidence references concise.
@@ -259,7 +259,9 @@ RULES:
 6. Do not repeat the same tool with the same arguments.
 7. If evidence is sufficient to answer the symptom, set stop=true.
 8. If no evidence has been collected, do not stop unless Application context alone answers the question.
-9. For Kubernetes readiness/health questions, inspect namespace health first. If a problematic pod is found, pod diagnostics can then retrieve events/logs.
+9. Tool descriptions may contain investigation recommendations (for example, namespace health before pod diagnostics). Treat them as guidance, not a hard-coded workflow: choose the observations that best answer the user's question.
+10. When multiple independent observations are useful, you may return several choices in one round with parallel=true.
+11. Set stop=true only when the evidence is sufficient for a final answer or no permitted tool can materially improve it.
 Return JSON only, matching the agentic decision schema."""
         text = self._generate_json(prompt, "agentic_decision")
         return AgenticDecision.model_validate_json(text)
