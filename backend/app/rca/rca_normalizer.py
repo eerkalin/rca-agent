@@ -105,11 +105,24 @@ def normalize_rca_payload(payload: dict) -> dict:
                 why = _as_text(item.get("why") or item.get("question") or item.get("prompt"))
                 answer = _as_text(item.get("answer") or item.get("because") or item.get("explanation"))
                 if why or answer:
+                    raw_level = item.get("level") or index
+                    try:
+                        level = int(raw_level)
+                    except (TypeError, ValueError):
+                        level = index
+                    level = min(max(level, 1), 5)
+                    raw_supported = item.get("evidence_supported")
+                    if isinstance(raw_supported, bool):
+                        evidence_supported = raw_supported
+                    elif isinstance(raw_supported, str):
+                        evidence_supported = raw_supported.strip().lower() in {"true", "1", "yes"}
+                    else:
+                        evidence_supported = bool(item.get("evidence")) and bool(answer)
                     five_whys.append({
-                        "level": int(item.get("level") or index),
+                        "level": level,
                         "why": why or f"Why #{index}",
                         "answer": answer or "The model did not provide an evidence-backed answer for this Why step.",
-                        "evidence_supported": bool(item.get("evidence_supported", bool(item.get("evidence")) and bool(answer))),
+                        "evidence_supported": evidence_supported,
                         "evidence": _evidence_refs(item.get("evidence")),
                     })
 
@@ -136,6 +149,14 @@ def normalize_rca_payload(payload: dict) -> dict:
         else:
             summary = "The model returned an incomplete RCA response."
 
+    raw_insufficient = payload.get("insufficient_evidence")
+    if isinstance(raw_insufficient, bool):
+        insufficient_evidence = raw_insufficient
+    elif isinstance(raw_insufficient, str):
+        insufficient_evidence = raw_insufficient.strip().lower() in {"true", "1", "yes"}
+    else:
+        insufficient_evidence = root_cause is None
+
     normalized = {
         "summary": summary,
         "impact": _as_text(payload.get("impact")) or None,
@@ -145,7 +166,7 @@ def normalize_rca_payload(payload: dict) -> dict:
         "contributing_factors": _string_list(payload.get("contributing_factors"), "factor", "name", "text"),
         "recommended_checks": _string_list(payload.get("recommended_checks"), "check", "action", "recommendation", "text"),
         "recommended_actions": _string_list(payload.get("recommended_actions"), "action", "recommendation", "text"),
-        "insufficient_evidence": bool(payload.get("insufficient_evidence", root_cause is None)),
+        "insufficient_evidence": insufficient_evidence,
         "limitations": limitations,
     }
     return normalized
