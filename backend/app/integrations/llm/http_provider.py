@@ -7,7 +7,7 @@ import time
 import httpx
 
 from app.observability.logging import elapsed_ms, log_event, sanitize_url
-from app.rca.agentic_models import AgenticDecision
+from app.rca.agentic_models import AgenticDecision, parse_agentic_decision_text
 from app.rca.agentic_prompt import build_agentic_planner_prompt
 from app.rca.rca_models import RCAResult
 from app.rca.rca_normalizer import parse_rca_json
@@ -235,18 +235,16 @@ Required shape:
         application_context: dict,
         symptom: str,
         available_tools: list[dict],
-        evidence: list[dict],
-        executed_tool_keys: list[str],
+        investigation_transcript: str,
     ) -> AgenticDecision:
         prompt = build_agentic_planner_prompt(
             application_context=application_context,
             symptom=symptom,
             available_tools=available_tools,
-            evidence=evidence,
-            executed_tool_keys=executed_tool_keys,
+            investigation_transcript=investigation_transcript,
         )
-        text = self._generate_json(prompt, "agentic_decision")
-        return AgenticDecision.model_validate_json(text)
+        text = self._generate_json(prompt, "agentic_decision_text")
+        return parse_agentic_decision_text(text)
 
     def resolve_scope(self, alert_text: str, technical_services: list[dict]) -> ScopeResolution:
         started = time.perf_counter()
