@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from app.integrations.gemini.provider import GeminiProvider
@@ -68,3 +70,41 @@ def test_transient_http_statuses_are_retryable():
     assert OpenAICompatibleProvider._retryable_status(503) is True
     assert OpenAICompatibleProvider._retryable_status(504) is True
     assert OpenAICompatibleProvider._retryable_status(400) is False
+
+
+
+def test_native_gemini_agentic_planner_does_not_send_response_schema(monkeypatch):
+    provider = GeminiProvider(
+        config={"model": "gemini-test"},
+        credentials={"api_key": "test-key"},
+    )
+    captured = {}
+
+    def fake_generate_with_retry(*, contents, config=None):
+        captured["contents"] = contents
+        captured["config"] = config
+        return SimpleNamespace(
+            text='{"stop":true,"parallel":false,"reason":"Enough evidence","choices":[]}',
+            usage_metadata=None,
+        )
+
+    monkeypatch.setattr(provider, "_generate_with_retry", fake_generate_with_retry)
+
+    decision = provider.plan_next_tools(
+        application_context={"application": {"name": "example"}, "dependencies": []},
+        symptom="Are all pods Ready?",
+        available_tools=[{
+            "tool_key": "application:1",
+            "tool_type": "kubernetes",
+            "provider_type": "kubernetes",
+            "operations": [{"name": "namespace_health"}],
+        }],
+        investigation_transcript="No previous tool calls.",
+    )
+
+    config_payload = captured["config"].model_dump(exclude_none=True)
+    assert "response_schema" not in config_payload
+    assert config_payload["response_mime_type"] == "application/json"
+    assert "STRICT RESPONSE FORMAT" in captured["contents"]
+    assert "No previous tool calls." in captured["contents"]
+    assert decision.stop is True
