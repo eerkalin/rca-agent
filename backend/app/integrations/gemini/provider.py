@@ -76,6 +76,7 @@ STRICT RULES:
 12. Keep evidence references concise. Do not reproduce large raw logs.
 13. Recommended checks and actions must be safe, advisory, and read-only from the agent perspective.
 14. Return every RCA schema key. Use [] for list sections that are not applicable. Never omit probable_causes, recommended_checks, recommended_actions, limitations, five_whys or contributing_factors.
+15. For direct inventory/state questions, treat complete counts as direct evidence. Example: namespace_health with total_pods > 0 and problem_pods_count = 0 means no problematic pods were found in the inspected namespace(s); do not call that insufficient evidence unless collection is truncated or errored.
 
 Return a concise technical RCA suitable for incident engineers.
 """

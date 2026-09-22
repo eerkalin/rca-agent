@@ -1,4 +1,5 @@
 from app.rca.evidence_collector import EvidenceCollector
+from app.rca.evidence_reducer import EvidenceReducer
 from app.rca.rca_models import RCAResult
 from app.rca.scope_models import ScopeResolution
 
@@ -63,3 +64,30 @@ def test_partial_rca_response_degrades_to_insufficient_evidence_instead_of_faili
     assert result.recommended_actions == []
     assert result.limitations == []
     assert result.insufficient_evidence is True
+
+
+def test_namespace_health_reducer_preserves_complete_zero_problem_count():
+    evidence = [{
+        "tool": {"id": 1, "tool_type": "kubernetes", "provider_type": "kubernetes", "connection_id": 1},
+        "scope_candidate": {},
+        "kubernetes": {
+            "scope": "namespace_health",
+            "total_pods": 23,
+            "problem_pods_count": 0,
+            "namespaces": [{
+                "namespace": "otel-demo",
+                "total_pods": 23,
+                "problem_pods_count": 0,
+                "problem_pods": [],
+                "truncated": False,
+            }],
+        },
+    }]
+
+    reduced = EvidenceReducer.reduce(evidence)
+
+    assert reduced[0]["kubernetes"]["scope"] == "namespace_health"
+    assert reduced[0]["kubernetes"]["total_pods"] == 23
+    assert reduced[0]["kubernetes"]["problem_pods_count"] == 0
+    assert reduced[0]["kubernetes"]["namespaces"][0]["problem_pods_count"] == 0
+    assert reduced[0]["kubernetes"]["namespaces"][0]["truncated"] is False

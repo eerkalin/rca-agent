@@ -53,6 +53,7 @@ STRICT RULES:
 10. Keep evidence references concise.
 11. Return JSON only, matching the RCA schema expected by the caller.
 12. Return every RCA schema key. Use [] for list sections that are not applicable; never omit probable_causes, recommended_checks, recommended_actions, limitations, five_whys or contributing_factors.
+13. For direct inventory/state questions, treat complete counts as direct evidence. Example: namespace_health with total_pods > 0 and problem_pods_count = 0 means no problematic pods were found in the inspected namespace(s); do not call that insufficient evidence unless collection is truncated or errored.
 """
 
     @staticmethod
