@@ -60,6 +60,7 @@ class ApplicationContextService:
                 "investigation_strategy": application.investigation_strategy,
                 "llm_connection_id": application.llm_connection_id,
                 "llm_config": application.llm_config or {},
+                "llm_history_enabled": bool(application.llm_history_enabled),
             },
             "tools": [
                 {
