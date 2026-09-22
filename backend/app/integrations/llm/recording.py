@@ -1,4 +1,5 @@
 import json
+import time
 
 from app.rca.repository import LLMInteractionRepository
 
@@ -49,8 +50,18 @@ class RecordingLLMProvider:
 
     def _call(self, phase: str, request_payload: dict, callback):
         self.sequence += 1
+        before = dict(getattr(self.delegate, "usage_totals", {}) or {})
+        started = time.perf_counter()
         try:
             result = callback()
+            after = dict(getattr(self.delegate, "usage_totals", {}) or {})
+            input_tokens = max(0, int(after.get("input_tokens", 0)) - int(before.get("input_tokens", 0)))
+            output_tokens = max(0, int(after.get("output_tokens", 0)) - int(before.get("output_tokens", 0)))
+            total_tokens = max(
+                int(after.get("total_tokens", 0)) - int(before.get("total_tokens", 0)),
+                input_tokens + output_tokens,
+            )
+            duration_ms = int((time.perf_counter() - started) * 1000)
             response_payload = (
                 result.model_dump()
                 if hasattr(result, "model_dump")
@@ -65,9 +76,20 @@ class RecordingLLMProvider:
                 model=self.model,
                 request_payload=_bounded_payload(request_payload),
                 response_payload=_bounded_payload(response_payload),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                duration_ms=duration_ms,
             )
             return result
         except Exception as exc:
+            after = dict(getattr(self.delegate, "usage_totals", {}) or {})
+            input_tokens = max(0, int(after.get("input_tokens", 0)) - int(before.get("input_tokens", 0)))
+            output_tokens = max(0, int(after.get("output_tokens", 0)) - int(before.get("output_tokens", 0)))
+            total_tokens = max(
+                int(after.get("total_tokens", 0)) - int(before.get("total_tokens", 0)),
+                input_tokens + output_tokens,
+            )
             LLMInteractionRepository.append(
                 self.db,
                 investigation_id=self.investigation_id,
@@ -77,6 +99,10 @@ class RecordingLLMProvider:
                 model=self.model,
                 request_payload=_bounded_payload(request_payload),
                 error=str(exc)[:8000],
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                duration_ms=int((time.perf_counter() - started) * 1000),
             )
             raise
 
