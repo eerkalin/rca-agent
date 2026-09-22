@@ -1,10 +1,7 @@
 import logging
 import time
-from pathlib import Path
-
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import text
 
 from app.api.ai import router as ai_router
@@ -25,6 +22,7 @@ from app.config import settings
 from app.db.schema_compat import assert_schema_current, schema_status
 from app.db.session import SessionLocal, engine
 from app.observability.logging import configure_logging, elapsed_ms, log_event, set_request_id
+from app.ui_routing import resolve_ui_file
 
 
 configure_logging(settings.log_level)
@@ -94,10 +92,6 @@ app.include_router(kubernetes_router, prefix="/api/v1")
 app.include_router(ai_router, prefix="/api/v1")
 app.include_router(scope_router, prefix="/api/v1")
 
-ui_dir = Path(__file__).resolve().parent / "ui"
-app.mount("/ui", StaticFiles(directory=ui_dir, html=True), name="ui")
-
-
 @app.on_event("startup")
 async def verify_database_schema() -> None:
     assert_schema_current(engine)
@@ -115,7 +109,14 @@ async def verify_database_schema() -> None:
 
 @app.get("/", include_in_schema=False)
 async def root():
-    return RedirectResponse(url="/ui/")
+    return RedirectResponse(url="/ui/applications")
+
+
+@app.get("/ui", include_in_schema=False)
+@app.get("/ui/", include_in_schema=False)
+@app.get("/ui/{path:path}", include_in_schema=False)
+async def ui(path: str = ""):
+    return FileResponse(resolve_ui_file(path))
 
 
 @app.get("/api/v1/health")
