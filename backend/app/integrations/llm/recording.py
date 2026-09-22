@@ -61,6 +61,7 @@ class RecordingLLMProvider:
                 int(after.get("total_tokens", 0)) - int(before.get("total_tokens", 0)),
                 input_tokens + output_tokens,
             )
+            token_usage_available = bool(after.get("available", False))
             duration_ms = int((time.perf_counter() - started) * 1000)
             response_payload = (
                 result.model_dump()
@@ -80,6 +81,7 @@ class RecordingLLMProvider:
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
                 duration_ms=duration_ms,
+                token_usage_available=token_usage_available,
             )
             return result
         except Exception as exc:
@@ -90,6 +92,7 @@ class RecordingLLMProvider:
                 int(after.get("total_tokens", 0)) - int(before.get("total_tokens", 0)),
                 input_tokens + output_tokens,
             )
+            token_usage_available = bool(after.get("available", False))
             LLMInteractionRepository.append(
                 self.db,
                 investigation_id=self.investigation_id,
@@ -103,6 +106,7 @@ class RecordingLLMProvider:
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
                 duration_ms=int((time.perf_counter() - started) * 1000),
+                token_usage_available=token_usage_available,
             )
             raise
 
