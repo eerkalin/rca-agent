@@ -141,8 +141,7 @@ class RecordingLLMProvider:
         application_context: dict,
         symptom: str,
         available_tools: list[dict],
-        evidence: list[dict],
-        executed_tool_keys: list[str],
+        investigation_transcript: str,
     ):
         return self._call(
             "agentic_plan",
@@ -150,14 +149,12 @@ class RecordingLLMProvider:
                 "application_context": application_context,
                 "symptom": symptom,
                 "available_tools": available_tools,
-                "evidence": evidence,
-                "executed_tool_keys": executed_tool_keys,
+                "investigation_transcript": investigation_transcript,
             },
             lambda: self.delegate.plan_next_tools(
                 application_context=application_context,
                 symptom=symptom,
                 available_tools=available_tools,
-                evidence=evidence,
-                executed_tool_keys=executed_tool_keys,
+                investigation_transcript=investigation_transcript,
             ),
         )

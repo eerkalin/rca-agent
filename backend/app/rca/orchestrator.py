@@ -25,6 +25,8 @@ from app.rca.tool_policy import ToolPolicy
 
 logger = logging.getLogger(__name__)
 
+MAX_AGENTIC_TRANSCRIPT_CHARS = 120_000
+
 
 class RCAOrchestrator:
     def __init__(self):
@@ -396,6 +398,40 @@ class RCAOrchestrator:
         return f"{tool_key}:{json.dumps(arguments or {}, sort_keys=True, ensure_ascii=False, default=str)}"
 
     @staticmethod
+    def _bounded_agentic_transcript(parts: list[str]) -> str:
+        text = "\n\n".join(part for part in parts if part).strip()
+        if len(text) <= MAX_AGENTIC_TRANSCRIPT_CHARS:
+            return text
+        keep_head = 8_000
+        keep_tail = MAX_AGENTIC_TRANSCRIPT_CHARS - keep_head
+        return (
+            text[:keep_head]
+            + "\n\n[... older transcript content truncated by RCA Agent ...]\n\n"
+            + text[-keep_tail:]
+        )
+
+    @staticmethod
+    def _tool_exchange_text(
+        *,
+        round_number: int,
+        tool_key: str,
+        reason: str,
+        arguments: dict,
+        observations: list[dict],
+    ) -> str:
+        reduced = EvidenceReducer.reduce(observations)
+        operation = arguments.get("operation") or "configured_collection"
+        return (
+            f"ROUND {round_number} TOOL REQUEST\n"
+            f"tool_key: {tool_key}\n"
+            f"operation: {operation}\n"
+            f"reason: {reason or 'No reason provided'}\n"
+            f"arguments: {json.dumps(arguments or {}, ensure_ascii=False, default=str)}\n\n"
+            f"ROUND {round_number} TOOL RESPONSE\n"
+            f"{json.dumps(reduced, ensure_ascii=False, default=str)}"
+        )
+
+    @staticmethod
     def _validate_agentic_namespace(tool: dict, namespace: str | None) -> str:
         allowed = RCAOrchestrator._configured_namespaces(tool)
         if not allowed:
@@ -602,18 +638,18 @@ class RCAOrchestrator:
 
         evidence: list[dict] = []
         executed_signatures: list[str] = []
+        transcript_parts: list[str] = []
         decisions: list[dict] = []
         planner_context = self._llm_application_context(context)
         max_rounds = 6
 
         for round_number in range(1, max_rounds + 1):
-            reduced = EvidenceReducer.reduce(evidence)
+            transcript_text = self._bounded_agentic_transcript(transcript_parts)
             decision = llm.plan_next_tools(
                 application_context=planner_context,
                 symptom=investigation.query,
                 available_tools=catalog,
-                evidence=reduced,
-                executed_tool_keys=executed_signatures,
+                investigation_transcript=transcript_text,
             )
             decisions.append({"round": round_number, **decision.model_dump(exclude_none=True)})
 
@@ -646,6 +682,12 @@ class RCAOrchestrator:
                 arguments = choice.arguments_dict()
                 signature = self._choice_signature(choice.tool_key, arguments)
                 if signature in executed_signatures:
+                    transcript_parts.append(
+                        f"ROUND {round_number} TOOL REQUEST REJECTED\n"
+                        f"tool_key: {choice.tool_key}\n"
+                        f"arguments: {json.dumps(arguments, ensure_ascii=False, default=str)}\n"
+                        "reason: identical tool call already exists in the transcript"
+                    )
                     continue
 
                 tool, dependency = binding
@@ -666,6 +708,15 @@ class RCAOrchestrator:
                         "error": str(exc),
                     }]
                 evidence.extend(observations)
+                transcript_parts.append(
+                    self._tool_exchange_text(
+                        round_number=round_number,
+                        tool_key=choice.tool_key,
+                        reason=choice.reason,
+                        arguments=arguments,
+                        observations=observations,
+                    )
+                )
                 executed_signatures.append(signature)
                 executed_this_round += 1
 
@@ -676,14 +727,24 @@ class RCAOrchestrator:
                 first = catalog[0]
                 tool, dependency = bindings[first["tool_key"]]
                 arguments = {"operation": "namespace_health"} if tool.get("tool_type") == "kubernetes" else {}
-                evidence.extend(self._execute_agentic_choice(
+                observations = self._execute_agentic_choice(
                     db,
                     tool=tool,
                     dependency=dependency,
                     arguments=arguments,
                     query=investigation.query,
                     context=context,
-                ))
+                )
+                evidence.extend(observations)
+                transcript_parts.append(
+                    self._tool_exchange_text(
+                        round_number=round_number,
+                        tool_key=first["tool_key"],
+                        reason="RCA Agent safe bootstrap because the planner returned no executable tool choice.",
+                        arguments=arguments,
+                        observations=observations,
+                    )
+                )
                 executed_signatures.append(self._choice_signature(first["tool_key"], arguments))
 
         if not evidence:

@@ -38,7 +38,9 @@ tool + operation + arguments
         ↓
 RCA Agent validates policy and executes the read-only operation
         ↓
-observation returned to the LLM
+observation appended to the textual investigation transcript
+        ↓
+previous tool requests + previous observations + new observation returned to the LLM
         ↓
 LLM decides whether more evidence is required
         ↓
@@ -62,8 +64,9 @@ On every planning round, the LLM receives:
 - enabled diagnostic bindings;
 - configured Kubernetes namespaces and safe diagnostic scope metadata;
 - the available read-only tools and their supported operations;
-- evidence collected so far;
-- signatures of already executed tool calls.
+- the textual investigation transcript containing previous LLM tool requests and the observations returned by RCA Agent.
+
+The planner response uses a strict JSON text protocol. RCA Agent parses and validates that text locally; provider-specific JSON Schema is not required for tool selection.
 
 The LLM then decides:
 

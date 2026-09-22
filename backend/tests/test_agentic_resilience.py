@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.rca.agentic_models import AgenticDecision
+from app.rca.agentic_models import AgenticDecision, parse_agentic_decision_text
 from app.rca.rca_normalizer import normalize_rca_payload
 
 
@@ -111,3 +111,26 @@ def test_agentic_arguments_drop_unknown_fields_before_execution():
         "namespace": "application",
         "pod_name": "pod-1",
     }
+
+
+
+def test_agentic_decision_parses_strict_json_text_without_provider_schema():
+    decision = parse_agentic_decision_text('{"stop":false,"parallel":true,"reason":"Inspect namespace","choices":[{"tool_key":"application:1","reason":"Need current pod health","arguments":{"operation":"namespace_health","namespace":"application"}}]}')
+
+    assert decision.stop is False
+    assert decision.parallel is True
+    assert decision.choices[0].tool_key == "application:1"
+    assert decision.choices[0].arguments_dict() == {
+        "operation": "namespace_health",
+        "namespace": "application",
+    }
+
+
+def test_agentic_decision_parser_accepts_markdown_fence_for_provider_robustness():
+    fence = chr(96) * 3
+    decision = parse_agentic_decision_text(
+        fence + 'json\n{"stop":true,"parallel":false,"reason":"Enough evidence","choices":[]}\n' + fence
+    )
+
+    assert decision.stop is True
+    assert decision.choices == []

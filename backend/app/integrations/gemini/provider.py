@@ -7,7 +7,7 @@ from google.genai import types
 
 from app.config import settings
 from app.observability.logging import elapsed_ms, log_event
-from app.rca.agentic_models import AgenticDecision
+from app.rca.agentic_models import AgenticDecision, parse_agentic_decision_text
 from app.rca.agentic_prompt import build_agentic_planner_prompt
 from app.rca.rca_models import RCAResult
 from app.rca.scope_models import ScopeResolution
@@ -125,6 +125,20 @@ class GeminiProvider:
             kwargs["max_output_tokens"] = int(self.max_output_tokens)
         return types.GenerateContentConfig(**kwargs)
 
+    def _planner_config(self):
+        """JSON mode without response_schema.
+
+        Gemini Developer API rejects some general JSON Schema constructs even
+        though RCA Agent can validate the returned decision locally.
+        """
+        kwargs = {
+            "temperature": self.temperature,
+            "response_mime_type": "application/json",
+        }
+        if self.max_output_tokens:
+            kwargs["max_output_tokens"] = int(self.max_output_tokens)
+        return types.GenerateContentConfig(**kwargs)
+
     def analyze_rca(self, symptom: str, evidence: list[dict], application_context: dict) -> RCAResult:
         evidence_json = json.dumps(evidence, ensure_ascii=False, default=str)
         context_json = json.dumps(application_context, ensure_ascii=False, default=str)
@@ -178,15 +192,13 @@ Return a concise technical RCA suitable for incident engineers.
         application_context: dict,
         symptom: str,
         available_tools: list[dict],
-        evidence: list[dict],
-        executed_tool_keys: list[str],
+        investigation_transcript: str,
     ) -> AgenticDecision:
         prompt = build_agentic_planner_prompt(
             application_context=application_context,
             symptom=symptom,
             available_tools=available_tools,
-            evidence=evidence,
-            executed_tool_keys=executed_tool_keys,
+            investigation_transcript=investigation_transcript,
         )
         started = time.perf_counter()
         log_event(
@@ -196,15 +208,15 @@ Return a concise technical RCA suitable for incident engineers.
             "Gemini agentic planning started",
             model=self.model,
             tools=len(available_tools),
-            evidence_items=len(evidence),
+            transcript_chars=len(investigation_transcript or ""),
             dependencies=len(application_context.get("dependencies", [])),
         )
         response = self._generate_with_retry(
             contents=prompt,
-            config=self._config(AgenticDecision),
+            config=self._planner_config(),
         )
         self._record_usage(response)
-        result = AgenticDecision.model_validate_json(response.text)
+        result = parse_agentic_decision_text(response.text)
         log_event(
             logger,
             logging.INFO,
