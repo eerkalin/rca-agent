@@ -216,6 +216,7 @@ class AnthropicProvider(BaseHTTPLLMProvider):
                 status_code = response.status_code
                 response.raise_for_status()
                 payload = response.json()
+            self._record_usage(payload.get("usage"))
             log_event(logger, logging.INFO, "llm.http.response", "Anthropic HTTP request completed", provider="anthropic", model=self.model, method="POST", endpoint=sanitize_url(endpoint), status_code=status_code, elapsed_ms=elapsed_ms(started), schema_name=schema_name)
         except Exception as exc:
             status_code = getattr(getattr(exc, "response", None), "status_code", None)
