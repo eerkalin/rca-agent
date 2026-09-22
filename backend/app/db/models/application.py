@@ -21,6 +21,7 @@ class Application(Base):
         ForeignKey("connections.id", ondelete="SET NULL"), nullable=True, index=True
     )
     llm_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    llm_history_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
