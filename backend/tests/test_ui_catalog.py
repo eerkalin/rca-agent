@@ -68,3 +68,20 @@ def test_ui_assets_are_bundled():
     assert (ui_dir / "auth-ui.js").is_file()
     assert (ui_dir / "investigations-ui.js").is_file()
     assert (ui_dir / "styles.css").is_file()
+
+
+def test_ui_auth_relogin_and_visual_shell_contract():
+    ui_dir = Path(__file__).resolve().parents[1] / "app" / "ui"
+    auth_js = (ui_dir / "auth-ui.js").read_text()
+    index_html = (ui_dir / "index.html").read_text()
+    styles = (ui_dir / "styles.css").read_text()
+
+    assert "cache: 'no-store'" in auth_js
+    assert "establishAuthenticatedSession" in auth_js
+    assert "resetWorkspaceAfterLogout" in auth_js
+    assert "Signing in…" in auth_js
+    assert 'class="brand-mark"' in index_html
+    assert 'class="topnav"' in index_html
+    assert "--surface:" in styles
+    assert "backdrop-filter" in styles
+    assert ".tile-grid" in styles
