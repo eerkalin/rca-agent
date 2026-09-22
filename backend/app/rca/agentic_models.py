@@ -1,3 +1,5 @@
+import json
+
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -128,3 +130,18 @@ class AgenticDecision(BaseModel):
         if self.stop:
             self.choices = []
         return self
+
+
+
+def parse_agentic_decision_text(text: str) -> AgenticDecision:
+    """Parse the strict planner JSON text without exposing a response schema to the LLM API."""
+    cleaned = (text or "").strip()
+    fence = chr(96) * 3
+    if cleaned.startswith(fence + "json"):
+        cleaned = cleaned.removeprefix(fence + "json").removesuffix(fence).strip()
+    elif cleaned.startswith(fence):
+        cleaned = cleaned.removeprefix(fence).removesuffix(fence).strip()
+    payload = json.loads(cleaned)
+    if not isinstance(payload, dict):
+        raise ValueError("Agentic planner response must be a JSON object")
+    return AgenticDecision.model_validate(payload)
