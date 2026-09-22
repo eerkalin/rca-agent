@@ -45,3 +45,26 @@ def test_anthropic_factory_requires_api_key():
 def test_factory_rejects_unknown_provider():
     with pytest.raises(ValueError):
         LLMProviderFactory.create({"provider_type": "unknown", "config": {}, "credentials": {}})
+
+
+def test_google_openai_compat_endpoint_is_routed_to_native_gemini():
+    provider = LLMProviderFactory.create(
+        {
+            "provider_type": "openai_compatible",
+            "config": {
+                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+                "model": "gemini-3.6-flash",
+            },
+            "credentials": {"api_key": "test-key"},
+        }
+    )
+    assert isinstance(provider, GeminiProvider)
+    assert provider.provider_type == "gemini"
+    assert provider.model == "gemini-3.6-flash"
+
+
+def test_transient_http_statuses_are_retryable():
+    assert OpenAICompatibleProvider._retryable_status(429) is True
+    assert OpenAICompatibleProvider._retryable_status(503) is True
+    assert OpenAICompatibleProvider._retryable_status(504) is True
+    assert OpenAICompatibleProvider._retryable_status(400) is False
