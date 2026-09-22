@@ -337,6 +337,15 @@ class KubernetesProvider:
                     }
                 )
 
+            desired_containers = [
+                container.name
+                for container in (pod.spec.containers or [])
+            ]
+            ready_containers = sum(
+                1 for status in container_statuses
+                if status.get("ready")
+            )
+
             pods.append(
                 {
                     "name": pod.metadata.name,
@@ -351,10 +360,19 @@ class KubernetesProvider:
                         if pod.status.start_time
                         else None
                     ),
+                    "deletion_timestamp": (
+                        pod.metadata.deletion_timestamp.isoformat()
+                        if pod.metadata.deletion_timestamp
+                        else None
+                    ),
                     "conditions":
                         pod_conditions,
                     "containers":
                         container_statuses,
+                    "desired_containers": desired_containers,
+                    "desired_container_count": len(desired_containers),
+                    "status_container_count": len(container_statuses),
+                    "ready_container_count": ready_containers,
                 }
             )
 
