@@ -52,6 +52,7 @@ STRICT RULES:
 9. Dependencies are context only unless evidence proves failure.
 10. Keep evidence references concise.
 11. Return JSON only, matching the RCA schema expected by the caller.
+12. Return every RCA schema key. Use [] for list sections that are not applicable; never omit probable_causes, recommended_checks, recommended_actions, limitations, five_whys or contributing_factors.
 """
 
     @staticmethod
