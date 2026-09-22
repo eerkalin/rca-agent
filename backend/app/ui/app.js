@@ -10,7 +10,23 @@ function collectFields(root,fields=[]){const out={};for(const f of fields){const
 
 async function refresh(){[catalog,connections,applications]=await Promise.all([api('/provider-catalog').then(x=>x.items),api('/connections').then(x=>x.items),api('/applications').then(x=>x.items)]);renderConnections();renderApplications()}
 
-document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{document.querySelectorAll('.view').forEach(v=>v.classList.add('hidden'));document.querySelectorAll('[data-view]').forEach(x=>x.classList.toggle('active',x===b));qs(`#${b.dataset.view}-view`).classList.remove('hidden')});qs('[data-view="applications"]')?.classList.add('active');
+function resetViewDetailState(viewName){
+  if(viewName==='applications' && typeof closeApplicationDetail==='function') closeApplicationDetail();
+  if(viewName==='connections' && typeof closeConnectionDetail==='function') closeConnectionDetail();
+  if(viewName==='investigations'){
+    qs('#investigation-detail')?.classList.add('hidden');
+    qs('#investigation-editor')?.classList.add('hidden');
+    qs('#investigations-list')?.classList.remove('hidden');
+    qs('#investigations-view .section-head')?.classList.remove('hidden');
+  }
+}
+document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{
+  resetViewDetailState(b.dataset.view);
+  document.querySelectorAll('.view').forEach(v=>v.classList.add('hidden'));
+  document.querySelectorAll('[data-view]').forEach(x=>x.classList.toggle('active',x===b));
+  qs(`#${b.dataset.view}-view`).classList.remove('hidden');
+});
+qs('[data-view="applications"]')?.classList.add('active');
 qs('#new-connection').onclick=()=>openConnectionEditor();qs('#new-application').onclick=()=>openApplicationEditor();
 
 function renderConnections(){const root=qs('#connections-list');root.innerHTML=connections.map(c=>{const p=provider(c.provider_type);return `<div class="card"><h3>${esc(c.name)}</h3><div class="meta">${esc(p?.label||c.provider_type)} · ${c.enabled?'enabled':'disabled'}</div><p>${esc(c.config?.base_url||c.config?.context||'Runtime connection')}</p><span class="badge ${c.has_credentials?'ok':''}">${c.has_credentials?'credentials saved':'no credentials'}</span><div class="actions"><button onclick="openConnectionEditor(${c.id})">Edit</button>${['prometheus','elasticsearch'].includes(c.provider_type)?`<button onclick="testConnection(${c.id})">Test</button>`:''}<button class="danger" onclick="deleteConnection(${c.id})">Delete</button></div></div>`}).join('')||'<p>No connections configured yet.</p>'}
