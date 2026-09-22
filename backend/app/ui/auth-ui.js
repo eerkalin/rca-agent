@@ -46,28 +46,79 @@ function applyRoleControls() {
   const admin = role === 'admin';
   const investigator = role === 'investigator';
 
-  qs('#new-application')?.classList.toggle('hidden', !admin);
-  qs('#new-connection')?.classList.toggle('hidden', !admin);
-  qs('#new-investigation')?.classList.toggle('hidden', !(admin || investigator));
+  // Always restore the neutral state first. This is required when a user logs
+  // out and another user with a different role logs in without a page reload.
+  document.querySelectorAll('#application-editor input,#application-editor select,#application-editor textarea,#connection-editor input,#connection-editor select,#connection-editor textarea').forEach(control => control.disabled = false);
+  document.querySelectorAll('#applications-view button,#connections-view button,#investigations-view button').forEach(button => {
+    if (button.dataset.roleHidden === 'true') button.classList.remove('hidden');
+    delete button.dataset.roleHidden;
+  });
+
+  const hideForRole = element => {
+    if (!element) return;
+    element.classList.add('hidden');
+    element.dataset.roleHidden = 'true';
+  };
+
+  if (!admin) {
+    hideForRole(qs('#new-application'));
+    hideForRole(qs('#new-connection'));
+  }
+  if (!(admin || investigator)) hideForRole(qs('#new-investigation'));
   qs('#users-nav')?.classList.toggle('hidden', !admin || !authState.enabled);
 
-  document.querySelectorAll('#applications-view button.danger,#connections-view button.danger').forEach(button => button.classList.toggle('hidden', !admin));
-  document.querySelectorAll('#applications-view .primary,#connections-view .primary').forEach(button => button.classList.toggle('hidden', !admin));
-  document.querySelectorAll('#applications-view button').forEach(button => {
-    const text = button.textContent.trim().toLowerCase();
-    if (!admin && ['add tool','add dependency','save application','save llm settings','save tool','save dependency','save'].includes(text)) button.classList.add('hidden');
-  });
-  document.querySelectorAll('#connections-view button').forEach(button => {
-    const onclick = button.getAttribute('onclick') || '';
-    const text = button.textContent.trim().toLowerCase();
-    if (!admin && ['save','delete'].some(word => text.includes(word))) button.classList.add('hidden');
-    if (!admin && !investigator && onclick.includes('testConnection')) button.classList.add('hidden');
-  });
-
-  // Existing detail forms are readable to non-admin roles, but not editable.
   if (!admin) {
+    document.querySelectorAll('#applications-view button.danger,#connections-view button.danger').forEach(hideForRole);
+    document.querySelectorAll('#applications-view .primary,#connections-view .primary').forEach(hideForRole);
+    document.querySelectorAll('#applications-view button').forEach(button => {
+      const text = button.textContent.trim().toLowerCase();
+      if (['add tool','add dependency','save application','save llm settings','save tool','save dependency','save'].includes(text)) hideForRole(button);
+    });
+    document.querySelectorAll('#connections-view button').forEach(button => {
+      const onclick = button.getAttribute('onclick') || '';
+      const text = button.textContent.trim().toLowerCase();
+      if (['save','delete'].some(word => text.includes(word))) hideForRole(button);
+      if (!investigator && onclick.includes('testConnection')) hideForRole(button);
+    });
+
+    // Read-only and Investigator can inspect detail pages, but cannot mutate
+    // their forms. Admin controls are re-enabled by the neutral reset above.
     document.querySelectorAll('#application-editor input,#application-editor select,#application-editor textarea,#connection-editor input,#connection-editor select,#connection-editor textarea').forEach(control => control.disabled = true);
   }
+}
+
+function resetSessionUi() {
+  // Clear data from the previous session so a different account never sees
+  // stale objects while its own read permissions are being loaded.
+  catalog = [];
+  connections = [];
+  applications = [];
+  if (typeof investigations !== 'undefined') investigations = [];
+  managedUsers = [];
+
+  qs('#applications-list') && (qs('#applications-list').innerHTML = '<div class="empty-state">Loading applications…</div>');
+  qs('#connections-list') && (qs('#connections-list').innerHTML = '<div class="empty-state">Loading connections…</div>');
+  qs('#investigations-list') && (qs('#investigations-list').innerHTML = '<div class="empty-state">Loading investigations…</div>');
+  qs('#users-list') && (qs('#users-list').innerHTML = '');
+
+  document.querySelectorAll('.view').forEach(view => view.classList.add('hidden'));
+  qs('#applications-view')?.classList.remove('hidden');
+  qs('#application-editor')?.classList.add('hidden');
+  qs('#connection-editor')?.classList.add('hidden');
+  qs('#investigation-editor')?.classList.add('hidden');
+  qs('#investigation-detail')?.classList.add('hidden');
+  qs('#user-editor')?.classList.add('hidden');
+}
+
+async function hydrateSessionData() {
+  await refresh();
+  if (typeof loadInvestigations === 'function') {
+    await loadInvestigations();
+  }
+  if (authState.role === 'admin') {
+    await loadUsers();
+  }
+  applyRoleControls();
 }
 
 function renderSession() {
@@ -110,12 +161,16 @@ qs('#login-form').onsubmit = async event => {
       method:'POST',
       body:JSON.stringify({username:qs('#login-username').value.trim(), password:qs('#login-password').value}),
     });
-    authState = {enabled:true, user:result.user, role:result.user.role};
+    // Re-read the session from the server after login. This prevents stale
+    // client role/session state when switching accounts without reloading.
+    const current = await authFetch('/auth/me');
+    authState = {enabled:true, user:current.user, role:current.effective_role};
     qs('#login-password').value = '';
+    qs('#login-error').classList.add('hidden');
+    resetSessionUi();
     hideLogin();
     renderSession();
-    await refresh();
-    applyRoleControls();
+    await hydrateSessionData();
   } catch (error) {
     showLogin(error.message);
   }
@@ -124,7 +179,11 @@ qs('#login-form').onsubmit = async event => {
 qs('#logout-button').onclick = async () => {
   try { await authFetch('/auth/logout', {method:'POST'}); } catch (_) {}
   authState = {enabled:true, user:null, role:'readonly'};
+  resetSessionUi();
+  renderSession();
   showLogin();
+  qs('#login-username').value = '';
+  qs('#login-password').value = '';
 };
 
 const rbacRenderApplications = renderApplications;
@@ -197,10 +256,17 @@ qs('#new-user').onclick = () => openUserEditor();
 const usersNav = qs('#users-nav');
 if (usersNav) usersNav.addEventListener('click', () => loadUsers().catch(error => toast(error.message)));
 
-loadAuthState().then(authenticated => {
-  if (authenticated) {
-    refresh().then(applyRoleControls).catch(error => {
-      if (authState.enabled && String(error.message).includes('Authentication')) showLogin();
-    });
+loadAuthState().then(async authenticated => {
+  if (!authenticated) return;
+  try {
+    await hydrateSessionData();
+  } catch (error) {
+    if (authState.enabled && /Authentication|Invalid session|expired/i.test(String(error.message))) {
+      authState = {enabled:true, user:null, role:'readonly'};
+      resetSessionUi();
+      showLogin();
+      return;
+    }
+    toast(error.message);
   }
 }).catch(error => showLogin(error.message));

@@ -12,10 +12,21 @@ def test_admin_can_mutate_configuration():
     assert _authorized(ROLE_ADMIN, request("DELETE", "/api/v1/applications/1")) is True
 
 
-def test_readonly_can_read_but_not_mutate():
-    assert _authorized(ROLE_READONLY, request("GET", "/api/v1/applications")) is True
-    assert _authorized(ROLE_READONLY, request("POST", "/api/v1/investigations")) is False
+def test_readonly_can_read_all_operator_views_but_not_mutate_or_execute():
+    for path in (
+        "/api/v1/applications",
+        "/api/v1/applications/1",
+        "/api/v1/connections",
+        "/api/v1/investigations",
+        "/api/v1/investigations/12",
+        "/api/v1/dependencies/4/tools",
+    ):
+        assert _authorized(ROLE_READONLY, request("GET", path)) is True
+
+    assert _authorized(ROLE_READONLY, request("POST", "/api/v1/investigations/manual")) is False
+    assert _authorized(ROLE_READONLY, request("POST", "/api/v1/connections/3/test")) is False
     assert _authorized(ROLE_READONLY, request("PATCH", "/api/v1/applications/1")) is False
+    assert _authorized(ROLE_READONLY, request("DELETE", "/api/v1/connections/3")) is False
 
 
 def test_investigator_can_run_diagnostics_but_not_change_configuration():

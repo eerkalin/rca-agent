@@ -1,7 +1,7 @@
 const API='/api/v1';
 let catalog=[];let connections=[];let applications=[];
 const qs=(s,r=document)=>r.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-async function api(path,options={}){const r=await fetch(API+path,{headers:{'Content-Type':'application/json',...(options.headers||{})},...options});if(!r.ok){let d;try{d=await r.json()}catch{}throw new Error(d?.detail||`${r.status} ${r.statusText}`)}return r.status===204?null:r.json()}
+async function api(path,options={}){const r=await fetch(API+path,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})},...options});if(!r.ok){let d;try{d=await r.json()}catch{}throw new Error(d?.detail||`${r.status} ${r.statusText}`)}return r.status===204?null:r.json()}
 function toast(msg){const e=qs('#toast');e.textContent=msg;e.classList.remove('hidden');setTimeout(()=>e.classList.add('hidden'),3500)}
 function provider(type){return catalog.find(x=>x.provider_type===type)}
 function fieldValue(input,field){if(field.type==='boolean')return input.checked;if(field.type==='number')return input.value===''?null:Number(input.value);if(field.type==='json'){if(!input.value.trim())return {};return JSON.parse(input.value)}return input.value}
@@ -36,4 +36,5 @@ async function deleteDependency(appId,id){if(!confirm('Delete dependency and its
 async function deleteDependencyTool(appId,id){await api(`/dependency-tools/${id}`,{method:'DELETE'});toast('Dependency tool deleted');openApplicationEditor(appId)}
 async function deleteApplication(id){if(!confirm('Delete application configuration? Historical investigations are preserved.'))return;await api(`/applications/${id}`,{method:'DELETE'});toast('Application deleted');await refresh()}
 
-refresh().catch(e=>toast(e.message));
+// Initial data loading is owned by auth-ui.js so authenticated and unauthenticated
+// deployments follow the same bootstrap path without racing the login/session check.
