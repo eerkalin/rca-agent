@@ -528,10 +528,6 @@ class RCAOrchestrator:
         return catalog, bindings
 
     @staticmethod
-    def _choice_signature(tool_key: str, arguments: dict) -> str:
-        return f"{tool_key}:{json.dumps(arguments or {}, sort_keys=True, ensure_ascii=False, default=str)}"
-
-    @staticmethod
     def _bounded_agentic_transcript(parts: list[str]) -> str:
         text = "\n\n".join(part for part in parts if part).strip()
         if len(text) <= MAX_AGENTIC_TRANSCRIPT_CHARS:
@@ -745,27 +741,6 @@ class RCAOrchestrator:
                 if not namespaces:
                     raise ValueError("Kubernetes tool has no configured namespace scope")
             snapshot = self.evidence_collector.collect_namespace_pods(
-                kubernetes=provider,
-                namespaces=namespaces,
-            )
-            return [{
-                "tool": descriptor,
-                "agentic_arguments": {"operation": operation, "namespaces": namespaces},
-                "scope_candidate": {},
-                "kubernetes": snapshot,
-            }]
-
-        # Kept only for backward compatibility with old stored/replayed planner
-        # responses. It is intentionally not advertised in the current tool catalog.
-        if operation == "namespace_health":
-            requested_namespace = (arguments or {}).get("namespace")
-            if requested_namespace:
-                namespaces = [self._validate_agentic_namespace(tool, requested_namespace)]
-            else:
-                namespaces = self._configured_namespaces(tool)
-                if not namespaces:
-                    raise ValueError("Kubernetes tool has no configured namespace scope")
-            snapshot = self.evidence_collector.collect_namespace_health(
                 kubernetes=provider,
                 namespaces=namespaces,
             )
