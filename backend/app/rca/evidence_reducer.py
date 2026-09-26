@@ -188,6 +188,7 @@ class EvidenceReducer:
             }
 
         if scope in {
+            "namespace_inventory",
             "pod_resources",
             "workload_diagnostics",
             "owner_chain",
