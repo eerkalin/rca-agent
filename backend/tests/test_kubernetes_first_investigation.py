@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from kubernetes import client
 
 from app.integrations.kubernetes.provider import KubernetesProvider
@@ -170,3 +172,118 @@ def test_container_diagnostics_expose_resources_but_redact_literal_env_values():
     assert summary["env"][1]["source"] == "secret_key_ref"
     assert summary["env"][1]["secret_name"] == "payment-secret"
     assert summary["env"][1]["key"] == "api-token"
+
+
+def test_collect_namespace_pods_returns_all_pods_without_agent_health_verdict():
+    kubernetes = FakeKubernetes()
+    kubernetes.list_namespace_pod_statuses = lambda namespace: {
+        "namespace": namespace,
+        "total_pods": 2,
+        "pods": kubernetes.list_pods_for_selector(namespace, {}),
+    }
+
+    result = EvidenceCollector().collect_namespace_pods(
+        kubernetes=kubernetes,
+        namespaces=["otel-demo"],
+    )
+
+    assert result["scope"] == "list_pods"
+    assert result["total_pods"] == 2
+    pods = result["namespaces"][0]["pods"]
+    assert [pod["name"] for pod in pods] == ["healthy-1", "broken-1"]
+    assert pods[1]["conditions"][0]["status"] == "False"
+    assert "problem_pods" not in result
+    assert "problem_pods_count" not in result
+
+
+class FakeCoreV1:
+    def __init__(self, pods):
+        self._pods = pods
+
+    def list_namespaced_pod(self, namespace, label_selector=None):
+        return SimpleNamespace(items=self._pods)
+
+
+def _container_state(*, running=None, waiting=None, terminated=None):
+    return SimpleNamespace(running=running, waiting=waiting, terminated=terminated)
+
+
+def _pod_fixture(*, ready_condition, container_ready, state, last_state=None):
+    status = SimpleNamespace(
+        name="payment",
+        ready=container_ready,
+        restart_count=3,
+        state=state,
+        last_state=last_state or _container_state(),
+    )
+    pod_status = SimpleNamespace(
+        phase="Running",
+        pod_ip="10.42.0.10",
+        start_time=None,
+        container_statuses=[status],
+        conditions=ready_condition,
+    )
+    pod_spec = SimpleNamespace(
+        node_name="node-1",
+        containers=[SimpleNamespace(name="payment")],
+    )
+    metadata = SimpleNamespace(
+        name="payment-abc",
+        namespace="otel-demo",
+        deletion_timestamp=None,
+    )
+    return SimpleNamespace(metadata=metadata, status=pod_status, spec=pod_spec)
+
+
+def test_provider_preserves_ready_false_and_waiting_container_state():
+    pod = _pod_fixture(
+        ready_condition=[
+            SimpleNamespace(
+                type="Ready",
+                status="False",
+                reason="ContainersNotReady",
+                message="containers with unready status",
+            )
+        ],
+        container_ready=False,
+        state=_container_state(
+            waiting=SimpleNamespace(reason="CrashLoopBackOff")
+        ),
+    )
+    provider = KubernetesProvider.__new__(KubernetesProvider)
+    provider.core_v1 = FakeCoreV1([pod])
+
+    result = provider.list_pods_for_selector("otel-demo", {})
+
+    assert len(result) == 1
+    item = result[0]
+    assert item["conditions"][0]["status"] == "False"
+    assert item["containers"][0]["ready"] is False
+    assert item["containers"][0]["state"] == "waiting"
+    assert item["containers"][0]["reason"] == "CrashLoopBackOff"
+    assert item["ready_container_count"] == 0
+
+
+def test_provider_preserves_unready_container_even_when_ready_condition_is_missing():
+    pod = _pod_fixture(
+        ready_condition=[],
+        container_ready=False,
+        state=_container_state(
+            terminated=SimpleNamespace(reason="OOMKilled")
+        ),
+        last_state=_container_state(
+            terminated=SimpleNamespace(reason="OOMKilled", exit_code=137)
+        ),
+    )
+    provider = KubernetesProvider.__new__(KubernetesProvider)
+    provider.core_v1 = FakeCoreV1([pod])
+
+    result = provider.list_pods_for_selector("otel-demo", {})
+
+    item = result[0]
+    assert item["conditions"] == []
+    assert item["containers"][0]["ready"] is False
+    assert item["containers"][0]["state"] == "terminated"
+    assert item["containers"][0]["reason"] == "OOMKilled"
+    assert item["containers"][0]["last_reason"] == "OOMKilled"
+    assert item["containers"][0]["last_exit_code"] == 137
