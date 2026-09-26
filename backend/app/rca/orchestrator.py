@@ -1104,6 +1104,9 @@ class RCAOrchestrator:
                     rca = self._analyze(investigation.query, evidence, context, llm)
 
                 self._persist_llm_usage(db, investigation, llm)
+                # Persist only redacted untrusted evidence. Raw provider payloads may
+                # contain accidental credentials in logs, events or error messages.
+                evidence = EvidenceReducer.redact_untrusted(evidence)
                 InvestigationRepository.mark_completed(
                     db=db,
                     investigation=investigation,
@@ -1146,5 +1149,5 @@ class RCAOrchestrator:
                     investigation,
                     str(exc),
                     scope=resolved_scope_payload,
-                    evidence=evidence if evidence else None,
+                    evidence=EvidenceReducer.redact_untrusted(evidence) if evidence else None,
                 )
