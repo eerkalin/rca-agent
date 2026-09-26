@@ -1008,6 +1008,7 @@ class RCAOrchestrator:
         evidence: list[dict] = []
         planner_stopped = False
         transcript_parts: list[str] = []
+        catalog_by_key = {item["tool_key"]: item for item in catalog}
         decisions: list[dict] = []
         planner_context = self._llm_application_context(context)
         max_rounds = 12
@@ -1046,6 +1047,23 @@ class RCAOrchestrator:
                     continue
 
                 arguments = choice.arguments_dict()
+                advertised = catalog_by_key.get(choice.tool_key) or {}
+                requested_operation = str(arguments.get("operation") or "").strip()
+                allowed_operations = {
+                    str(item.get("name"))
+                    for item in (advertised.get("operations") or [])
+                    if item.get("name")
+                }
+                if not requested_operation or requested_operation not in allowed_operations:
+                    transcript_parts.append(
+                        f"ROUND {round_number} TOOL REQUEST REJECTED\n"
+                        f"tool_key: {choice.tool_key}\n"
+                        f"requested_operation: {requested_operation or '<missing>'}\n"
+                        f"allowed_operations: {json.dumps(sorted(allowed_operations), ensure_ascii=False)}\n"
+                        "reason: operation is not advertised for this tool/cluster"
+                    )
+                    continue
+
                 tool, dependency = binding
                 try:
                     observations = self._execute_agentic_choice(
