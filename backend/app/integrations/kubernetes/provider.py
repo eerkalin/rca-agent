@@ -9,7 +9,15 @@ class KubernetesProvider:
 
         self.core_v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
+        self.batch_v1 = client.BatchV1Api()
+        self.autoscaling_v2 = client.AutoscalingV2Api()
+        self.policy_v1 = client.PolicyV1Api()
+        self.networking_v1 = client.NetworkingV1Api()
+        self.storage_v1 = client.StorageV1Api()
+        self.discovery_v1 = client.DiscoveryV1Api()
+        self.custom_objects = client.CustomObjectsApi()
         self.version_api = client.VersionApi()
+        self.api_client = client.ApiClient()
 
     @staticmethod
     def _load_config() -> str:
@@ -63,7 +71,7 @@ class KubernetesProvider:
                 "name": item.metadata.name,
                 "kind": "Deployment",
                 "labels": item.metadata.labels or {},
-                "annotations": item.metadata.annotations or {},
+                "annotation_keys": sorted((item.metadata.annotations or {}).keys()),
                 "selector": (
                     item.spec.selector.match_labels or {}
                 ),
@@ -115,7 +123,7 @@ class KubernetesProvider:
                 "name": item.metadata.name,
                 "kind": "StatefulSet",
                 "labels": item.metadata.labels or {},
-                "annotations": item.metadata.annotations or {},
+                "annotation_keys": sorted((item.metadata.annotations or {}).keys()),
                 "selector": (
                     item.spec.selector.match_labels or {}
                 ),
@@ -167,7 +175,7 @@ class KubernetesProvider:
                 "name": item.metadata.name,
                 "kind": "DaemonSet",
                 "labels": item.metadata.labels or {},
-                "annotations": item.metadata.annotations or {},
+                "annotation_keys": sorted((item.metadata.annotations or {}).keys()),
                 "selector": (
                     item.spec.selector.match_labels or {}
                 ),
@@ -538,3 +546,711 @@ class KubernetesProvider:
                 )
 
         return endpoints
+
+    @staticmethod
+    def _owner_references(metadata) -> list[dict]:
+        return [
+            {
+                "api_version": ref.api_version,
+                "kind": ref.kind,
+                "name": ref.name,
+                "controller": bool(ref.controller),
+            }
+            for ref in (getattr(metadata, "owner_references", None) or [])
+        ]
+
+    @staticmethod
+    def _resource_requirements(resources) -> dict:
+        if resources is None:
+            return {"requests": {}, "limits": {}}
+        return {
+            "requests": dict(resources.requests or {}),
+            "limits": dict(resources.limits or {}),
+        }
+
+    @staticmethod
+    def _probe_summary(probe) -> dict | None:
+        if probe is None:
+            return None
+        result = {
+            "initial_delay_seconds": probe.initial_delay_seconds,
+            "period_seconds": probe.period_seconds,
+            "timeout_seconds": probe.timeout_seconds,
+            "success_threshold": probe.success_threshold,
+            "failure_threshold": probe.failure_threshold,
+        }
+        if getattr(probe, "http_get", None):
+            http = probe.http_get
+            result["handler"] = {
+                "type": "http_get",
+                "path": http.path,
+                "port": http.port,
+                "scheme": http.scheme,
+                "host": http.host,
+                "http_headers": [
+                    {"name": item.name, "value": "<redacted>"}
+                    for item in (http.http_headers or [])
+                ],
+            }
+        elif getattr(probe, "tcp_socket", None):
+            result["handler"] = {
+                "type": "tcp_socket",
+                "port": probe.tcp_socket.port,
+                "host": probe.tcp_socket.host,
+            }
+        elif getattr(probe, "grpc", None):
+            result["handler"] = {
+                "type": "grpc",
+                "port": probe.grpc.port,
+                "service": probe.grpc.service,
+            }
+        elif getattr(probe, "_exec", None):
+            result["handler"] = {
+                "type": "exec",
+                "command": "<redacted>",
+            }
+        return result
+
+    @classmethod
+    def _container_spec_summary(cls, container) -> dict:
+        env = []
+        for item in container.env or []:
+            entry = {"name": item.name}
+            source = item.value_from
+            if source is None:
+                entry.update({"source": "literal", "value": "<redacted>"})
+            elif source.secret_key_ref:
+                entry.update({
+                    "source": "secret_key_ref",
+                    "secret_name": source.secret_key_ref.name,
+                    "key": source.secret_key_ref.key,
+                    "optional": source.secret_key_ref.optional,
+                })
+            elif source.config_map_key_ref:
+                entry.update({
+                    "source": "config_map_key_ref",
+                    "config_map_name": source.config_map_key_ref.name,
+                    "key": source.config_map_key_ref.key,
+                    "optional": source.config_map_key_ref.optional,
+                })
+            elif source.field_ref:
+                entry.update({
+                    "source": "field_ref",
+                    "field_path": source.field_ref.field_path,
+                })
+            elif source.resource_field_ref:
+                entry.update({
+                    "source": "resource_field_ref",
+                    "resource": source.resource_field_ref.resource,
+                    "container_name": source.resource_field_ref.container_name,
+                })
+            else:
+                entry["source"] = "value_from"
+            env.append(entry)
+
+        env_from = []
+        for item in container.env_from or []:
+            if item.secret_ref:
+                env_from.append({
+                    "source": "secret_ref",
+                    "secret_name": item.secret_ref.name,
+                    "optional": item.secret_ref.optional,
+                    "prefix": item.prefix,
+                })
+            elif item.config_map_ref:
+                env_from.append({
+                    "source": "config_map_ref",
+                    "config_map_name": item.config_map_ref.name,
+                    "optional": item.config_map_ref.optional,
+                    "prefix": item.prefix,
+                })
+
+        security = container.security_context
+        return {
+            "name": container.name,
+            "image": container.image,
+            "image_pull_policy": container.image_pull_policy,
+            "resources": cls._resource_requirements(container.resources),
+            "ports": [
+                {
+                    "name": port.name,
+                    "container_port": port.container_port,
+                    "protocol": port.protocol,
+                }
+                for port in (container.ports or [])
+            ],
+            "readiness_probe": cls._probe_summary(container.readiness_probe),
+            "liveness_probe": cls._probe_summary(container.liveness_probe),
+            "startup_probe": cls._probe_summary(container.startup_probe),
+            "env": env,
+            "env_from": env_from,
+            "volume_mounts": [
+                {
+                    "name": mount.name,
+                    "mount_path": mount.mount_path,
+                    "read_only": mount.read_only,
+                    "sub_path": mount.sub_path,
+                }
+                for mount in (container.volume_mounts or [])
+            ],
+            "command_configured": bool(container.command),
+            "args_configured": bool(container.args),
+            "security_context": {
+                "privileged": getattr(security, "privileged", None),
+                "run_as_user": getattr(security, "run_as_user", None),
+                "run_as_group": getattr(security, "run_as_group", None),
+                "run_as_non_root": getattr(security, "run_as_non_root", None),
+                "read_only_root_filesystem": getattr(security, "read_only_root_filesystem", None),
+                "allow_privilege_escalation": getattr(security, "allow_privilege_escalation", None),
+            } if security else None,
+        }
+
+    @staticmethod
+    def _container_status_summary(status) -> dict:
+        state = {"state": "unknown"}
+        if status.state.running:
+            state = {
+                "state": "running",
+                "started_at": status.state.running.started_at.isoformat()
+                if status.state.running.started_at else None,
+            }
+        elif status.state.waiting:
+            state = {
+                "state": "waiting",
+                "reason": status.state.waiting.reason,
+                "message": status.state.waiting.message,
+            }
+        elif status.state.terminated:
+            terminated = status.state.terminated
+            state = {
+                "state": "terminated",
+                "reason": terminated.reason,
+                "message": terminated.message,
+                "exit_code": terminated.exit_code,
+                "signal": terminated.signal,
+                "started_at": terminated.started_at.isoformat() if terminated.started_at else None,
+                "finished_at": terminated.finished_at.isoformat() if terminated.finished_at else None,
+            }
+
+        last_state = None
+        if status.last_state and status.last_state.terminated:
+            terminated = status.last_state.terminated
+            last_state = {
+                "state": "terminated",
+                "reason": terminated.reason,
+                "message": terminated.message,
+                "exit_code": terminated.exit_code,
+                "signal": terminated.signal,
+                "started_at": terminated.started_at.isoformat() if terminated.started_at else None,
+                "finished_at": terminated.finished_at.isoformat() if terminated.finished_at else None,
+            }
+
+        return {
+            "name": status.name,
+            "ready": status.ready,
+            "started": status.started,
+            "restart_count": status.restart_count,
+            "image": status.image,
+            "image_id": status.image_id,
+            "container_id": status.container_id,
+            "current_state": state,
+            "last_state": last_state,
+        }
+
+    @staticmethod
+    def _volume_summary(volume) -> dict:
+        item = {"name": volume.name, "type": "other"}
+        if volume.persistent_volume_claim:
+            item.update({
+                "type": "persistent_volume_claim",
+                "claim_name": volume.persistent_volume_claim.claim_name,
+                "read_only": volume.persistent_volume_claim.read_only,
+            })
+        elif volume.config_map:
+            item.update({
+                "type": "config_map",
+                "config_map_name": volume.config_map.name,
+                "optional": volume.config_map.optional,
+                "keys": [entry.key for entry in (volume.config_map.items or [])],
+            })
+        elif volume.secret:
+            item.update({
+                "type": "secret",
+                "secret_name": volume.secret.secret_name,
+                "optional": volume.secret.optional,
+                "keys": [entry.key for entry in (volume.secret.items or [])],
+            })
+        elif volume.empty_dir:
+            item.update({
+                "type": "empty_dir",
+                "medium": volume.empty_dir.medium,
+                "size_limit": volume.empty_dir.size_limit,
+            })
+        elif volume.host_path:
+            item.update({
+                "type": "host_path",
+                "path": volume.host_path.path,
+                "host_path_type": volume.host_path.type,
+            })
+        elif volume.projected:
+            item.update({
+                "type": "projected",
+                "sources": len(volume.projected.sources or []),
+            })
+        return item
+
+    def get_pod_deep_diagnostics(self, namespace: str, pod_name: str) -> dict:
+        pod = self.core_v1.read_namespaced_pod(name=pod_name, namespace=namespace)
+        spec = pod.spec
+        status = pod.status
+        pod_security = spec.security_context
+        return {
+            "name": pod.metadata.name,
+            "namespace": pod.metadata.namespace,
+            "uid": pod.metadata.uid,
+            "labels": pod.metadata.labels or {},
+            "annotation_keys": sorted((pod.metadata.annotations or {}).keys()),
+            "owner_references": self._owner_references(pod.metadata),
+            "phase": status.phase,
+            "qos_class": status.qos_class,
+            "pod_ip": status.pod_ip,
+            "host_ip": status.host_ip,
+            "node_name": spec.node_name,
+            "start_time": status.start_time.isoformat() if status.start_time else None,
+            "deletion_timestamp": (
+                pod.metadata.deletion_timestamp.isoformat()
+                if pod.metadata.deletion_timestamp else None
+            ),
+            "conditions": [
+                {
+                    "type": condition.type,
+                    "status": condition.status,
+                    "reason": condition.reason,
+                    "message": condition.message,
+                    "last_probe_time": (
+                        condition.last_probe_time.isoformat()
+                        if condition.last_probe_time else None
+                    ),
+                    "last_transition_time": (
+                        condition.last_transition_time.isoformat()
+                        if condition.last_transition_time else None
+                    ),
+                }
+                for condition in (status.conditions or [])
+            ],
+            "containers": [
+                self._container_spec_summary(container)
+                for container in (spec.containers or [])
+            ],
+            "init_containers": [
+                self._container_spec_summary(container)
+                for container in (spec.init_containers or [])
+            ],
+            "container_statuses": [
+                self._container_status_summary(item)
+                for item in (status.container_statuses or [])
+            ],
+            "init_container_statuses": [
+                self._container_status_summary(item)
+                for item in (status.init_container_statuses or [])
+            ],
+            "restart_policy": spec.restart_policy,
+            "termination_grace_period_seconds": spec.termination_grace_period_seconds,
+            "service_account_name": spec.service_account_name,
+            "priority_class_name": spec.priority_class_name,
+            "scheduler_name": spec.scheduler_name,
+            "dns_policy": spec.dns_policy,
+            "host_network": bool(spec.host_network),
+            "host_pid": bool(spec.host_pid),
+            "host_ipc": bool(spec.host_ipc),
+            "node_selector": spec.node_selector or {},
+            "tolerations": [
+                {
+                    "key": item.key,
+                    "operator": item.operator,
+                    "effect": item.effect,
+                    "toleration_seconds": item.toleration_seconds,
+                    "value": item.value,
+                }
+                for item in (spec.tolerations or [])
+            ],
+            "security_context": {
+                "run_as_user": getattr(pod_security, "run_as_user", None),
+                "run_as_group": getattr(pod_security, "run_as_group", None),
+                "run_as_non_root": getattr(pod_security, "run_as_non_root", None),
+                "fs_group": getattr(pod_security, "fs_group", None),
+            } if pod_security else None,
+            "volumes": [
+                self._volume_summary(volume)
+                for volume in (spec.volumes or [])
+            ],
+        }
+
+    def get_pod_resources(self, namespace: str, pod_name: str) -> dict:
+        pod = self.get_pod_deep_diagnostics(namespace=namespace, pod_name=pod_name)
+        return {
+            "name": pod["name"],
+            "namespace": pod["namespace"],
+            "qos_class": pod.get("qos_class"),
+            "node_name": pod.get("node_name"),
+            "containers": [
+                {
+                    "name": item.get("name"),
+                    "resources": item.get("resources", {}),
+                }
+                for item in pod.get("containers", [])
+            ],
+            "init_containers": [
+                {
+                    "name": item.get("name"),
+                    "resources": item.get("resources", {}),
+                }
+                for item in pod.get("init_containers", [])
+            ],
+        }
+
+    def get_workload_diagnostics(self, namespace: str, workload_kind: str, workload_name: str) -> dict:
+        kind = str(workload_kind or "").strip().lower()
+        if kind == "deployment":
+            obj = self.apps_v1.read_namespaced_deployment(workload_name, namespace)
+        elif kind == "statefulset":
+            obj = self.apps_v1.read_namespaced_stateful_set(workload_name, namespace)
+        elif kind == "daemonset":
+            obj = self.apps_v1.read_namespaced_daemon_set(workload_name, namespace)
+        elif kind == "replicaset":
+            obj = self.apps_v1.read_namespaced_replica_set(workload_name, namespace)
+        elif kind == "job":
+            obj = self.batch_v1.read_namespaced_job(workload_name, namespace)
+        elif kind == "cronjob":
+            obj = self.batch_v1.read_namespaced_cron_job(workload_name, namespace)
+        else:
+            raise ValueError("Unsupported workload_kind; use Deployment, StatefulSet, DaemonSet, ReplicaSet, Job or CronJob")
+
+        spec = obj.spec
+        template = getattr(spec, "template", None)
+        template_spec = getattr(template, "spec", None)
+        selector = getattr(spec, "selector", None)
+        return {
+            "kind": workload_kind,
+            "name": obj.metadata.name,
+            "namespace": obj.metadata.namespace,
+            "generation": obj.metadata.generation,
+            "labels": obj.metadata.labels or {},
+            "annotation_keys": sorted((obj.metadata.annotations or {}).keys()),
+            "owner_references": self._owner_references(obj.metadata),
+            "selector": self.api_client.sanitize_for_serialization(selector) if selector else None,
+            "replicas": getattr(spec, "replicas", None),
+            "strategy": self.api_client.sanitize_for_serialization(
+                getattr(spec, "strategy", None) or getattr(spec, "update_strategy", None)
+            ),
+            "containers": [
+                self._container_spec_summary(container)
+                for container in (getattr(template_spec, "containers", None) or [])
+            ],
+            "init_containers": [
+                self._container_spec_summary(container)
+                for container in (getattr(template_spec, "init_containers", None) or [])
+            ],
+            "status": self.api_client.sanitize_for_serialization(obj.status),
+        }
+
+    def get_owner_chain(self, namespace: str, pod_name: str, max_depth: int = 6) -> list[dict]:
+        pod = self.core_v1.read_namespaced_pod(name=pod_name, namespace=namespace)
+        owners = self._owner_references(pod.metadata)
+        chain = []
+        depth = 0
+        while owners and depth < max_depth:
+            owner = next((item for item in owners if item.get("controller")), owners[0])
+            chain.append(owner)
+            kind = str(owner.get("kind") or "").lower()
+            name = owner.get("name")
+            depth += 1
+            if kind == "replicaset":
+                obj = self.apps_v1.read_namespaced_replica_set(name, namespace)
+            elif kind == "job":
+                obj = self.batch_v1.read_namespaced_job(name, namespace)
+            else:
+                break
+            owners = self._owner_references(obj.metadata)
+        return chain
+
+    def get_node_diagnostics(self, node_name: str) -> dict:
+        node = self.core_v1.read_node(name=node_name)
+        return {
+            "name": node.metadata.name,
+            "labels": node.metadata.labels or {},
+            "unschedulable": bool(node.spec.unschedulable),
+            "taints": [
+                {
+                    "key": item.key,
+                    "value": item.value,
+                    "effect": item.effect,
+                    "time_added": item.time_added.isoformat() if item.time_added else None,
+                }
+                for item in (node.spec.taints or [])
+            ],
+            "capacity": dict(node.status.capacity or {}),
+            "allocatable": dict(node.status.allocatable or {}),
+            "conditions": [
+                {
+                    "type": item.type,
+                    "status": item.status,
+                    "reason": item.reason,
+                    "message": item.message,
+                    "last_heartbeat_time": (
+                        item.last_heartbeat_time.isoformat()
+                        if item.last_heartbeat_time else None
+                    ),
+                    "last_transition_time": (
+                        item.last_transition_time.isoformat()
+                        if item.last_transition_time else None
+                    ),
+                }
+                for item in (node.status.conditions or [])
+            ],
+            "node_info": {
+                "architecture": node.status.node_info.architecture if node.status.node_info else None,
+                "operating_system": node.status.node_info.operating_system if node.status.node_info else None,
+                "os_image": node.status.node_info.os_image if node.status.node_info else None,
+                "kernel_version": node.status.node_info.kernel_version if node.status.node_info else None,
+                "container_runtime_version": node.status.node_info.container_runtime_version if node.status.node_info else None,
+                "kubelet_version": node.status.node_info.kubelet_version if node.status.node_info else None,
+            },
+        }
+
+    def get_pod_resource_usage(self, namespace: str, pod_name: str) -> dict:
+        try:
+            result = self.custom_objects.get_namespaced_custom_object(
+                group="metrics.k8s.io",
+                version="v1beta1",
+                namespace=namespace,
+                plural="pods",
+                name=pod_name,
+            )
+        except Exception as exc:
+            return {"available": False, "reason": str(exc)}
+        return {
+            "available": True,
+            "timestamp": result.get("timestamp"),
+            "window": result.get("window"),
+            "containers": [
+                {
+                    "name": item.get("name"),
+                    "usage": item.get("usage") or {},
+                }
+                for item in (result.get("containers") or [])
+            ],
+        }
+
+    def get_node_resource_usage(self, node_name: str) -> dict:
+        try:
+            result = self.custom_objects.get_cluster_custom_object(
+                group="metrics.k8s.io",
+                version="v1beta1",
+                plural="nodes",
+                name=node_name,
+            )
+        except Exception as exc:
+            return {"available": False, "reason": str(exc)}
+        return {
+            "available": True,
+            "timestamp": result.get("timestamp"),
+            "window": result.get("window"),
+            "usage": result.get("usage") or {},
+        }
+
+    def get_namespace_constraints(self, namespace: str) -> dict:
+        quotas = self.core_v1.list_namespaced_resource_quota(namespace=namespace)
+        limits = self.core_v1.list_namespaced_limit_range(namespace=namespace)
+        return {
+            "namespace": namespace,
+            "resource_quotas": [
+                {
+                    "name": item.metadata.name,
+                    "hard": dict((item.status.hard or {}) if item.status else {}),
+                    "used": dict((item.status.used or {}) if item.status else {}),
+                    "scopes": list(item.spec.scopes or []),
+                }
+                for item in quotas.items
+            ],
+            "limit_ranges": [
+                {
+                    "name": item.metadata.name,
+                    "limits": [
+                        {
+                            "type": rule.type,
+                            "default": dict(rule.default or {}),
+                            "default_request": dict(rule.default_request or {}),
+                            "max": dict(rule.max or {}),
+                            "min": dict(rule.min or {}),
+                            "max_limit_request_ratio": dict(rule.max_limit_request_ratio or {}),
+                        }
+                        for rule in (item.spec.limits or [])
+                    ],
+                }
+                for item in limits.items
+            ],
+        }
+
+    def get_storage_diagnostics(self, namespace: str, pvc_name: str) -> dict:
+        pvc = self.core_v1.read_namespaced_persistent_volume_claim(
+            name=pvc_name,
+            namespace=namespace,
+        )
+        result = {
+            "pvc": {
+                "name": pvc.metadata.name,
+                "namespace": pvc.metadata.namespace,
+                "phase": pvc.status.phase,
+                "storage_class_name": pvc.spec.storage_class_name,
+                "volume_name": pvc.spec.volume_name,
+                "volume_mode": pvc.spec.volume_mode,
+                "access_modes": list(pvc.spec.access_modes or []),
+                "requested": dict((pvc.spec.resources.requests or {}) if pvc.spec.resources else {}),
+                "capacity": dict((pvc.status.capacity or {}) if pvc.status else {}),
+                "conditions": self.api_client.sanitize_for_serialization(
+                    (pvc.status.conditions or []) if pvc.status else []
+                ),
+            }
+        }
+        if pvc.spec.volume_name:
+            pv = self.core_v1.read_persistent_volume(name=pvc.spec.volume_name)
+            result["pv"] = {
+                "name": pv.metadata.name,
+                "phase": pv.status.phase,
+                "capacity": dict(pv.spec.capacity or {}),
+                "access_modes": list(pv.spec.access_modes or []),
+                "storage_class_name": pv.spec.storage_class_name,
+                "volume_mode": pv.spec.volume_mode,
+                "persistent_volume_reclaim_policy": pv.spec.persistent_volume_reclaim_policy,
+                "mount_options": list(pv.spec.mount_options or []),
+                "claim_ref": {
+                    "namespace": pv.spec.claim_ref.namespace,
+                    "name": pv.spec.claim_ref.name,
+                } if pv.spec.claim_ref else None,
+            }
+        if pvc.spec.storage_class_name:
+            storage_class = self.storage_v1.read_storage_class(name=pvc.spec.storage_class_name)
+            result["storage_class"] = {
+                "name": storage_class.metadata.name,
+                "provisioner": storage_class.provisioner,
+                "reclaim_policy": storage_class.reclaim_policy,
+                "volume_binding_mode": storage_class.volume_binding_mode,
+                "allow_volume_expansion": storage_class.allow_volume_expansion,
+                "mount_options": list(storage_class.mount_options or []),
+                "parameter_keys": sorted((storage_class.parameters or {}).keys()),
+            }
+        return result
+
+    def get_endpoint_slices(self, namespace: str, service_name: str) -> list[dict]:
+        result = self.discovery_v1.list_namespaced_endpoint_slice(
+            namespace=namespace,
+            label_selector=f"kubernetes.io/service-name={service_name}",
+        )
+        return [
+            {
+                "name": item.metadata.name,
+                "address_type": item.address_type,
+                "ports": [
+                    {
+                        "name": port.name,
+                        "port": port.port,
+                        "protocol": port.protocol,
+                    }
+                    for port in (item.ports or [])
+                ],
+                "endpoints": [
+                    {
+                        "addresses": list(endpoint.addresses or []),
+                        "hostname": endpoint.hostname,
+                        "node_name": endpoint.node_name,
+                        "ready": endpoint.conditions.ready if endpoint.conditions else None,
+                        "serving": endpoint.conditions.serving if endpoint.conditions else None,
+                        "terminating": endpoint.conditions.terminating if endpoint.conditions else None,
+                        "target_ref": {
+                            "kind": endpoint.target_ref.kind,
+                            "name": endpoint.target_ref.name,
+                        } if endpoint.target_ref else None,
+                    }
+                    for endpoint in (item.endpoints or [])
+                ],
+            }
+            for item in result.items[:50]
+        ]
+
+    def get_networking_diagnostics(self, namespace: str) -> dict:
+        ingresses = self.networking_v1.list_namespaced_ingress(namespace=namespace)
+        policies = self.networking_v1.list_namespaced_network_policy(namespace=namespace)
+        return {
+            "namespace": namespace,
+            "ingresses": [
+                {
+                    "name": item.metadata.name,
+                    "ingress_class_name": item.spec.ingress_class_name,
+                    "rules": self.api_client.sanitize_for_serialization(item.spec.rules or []),
+                    "tls": [
+                        {
+                            "hosts": list(tls.hosts or []),
+                            "secret_name": tls.secret_name,
+                        }
+                        for tls in (item.spec.tls or [])
+                    ],
+                    "status": self.api_client.sanitize_for_serialization(item.status),
+                }
+                for item in ingresses.items[:50]
+            ],
+            "network_policies": [
+                {
+                    "name": item.metadata.name,
+                    "pod_selector": self.api_client.sanitize_for_serialization(item.spec.pod_selector),
+                    "policy_types": list(item.spec.policy_types or []),
+                    "ingress": self.api_client.sanitize_for_serialization(item.spec.ingress or []),
+                    "egress": self.api_client.sanitize_for_serialization(item.spec.egress or []),
+                }
+                for item in policies.items[:50]
+            ],
+        }
+
+    def get_autoscaling_diagnostics(self, namespace: str, workload_name: str | None = None) -> dict:
+        hpas = self.autoscaling_v2.list_namespaced_horizontal_pod_autoscaler(namespace=namespace)
+        pdbs = self.policy_v1.list_namespaced_pod_disruption_budget(namespace=namespace)
+
+        filtered_hpas = []
+        for item in hpas.items:
+            target = item.spec.scale_target_ref
+            if workload_name and target.name != workload_name:
+                continue
+            filtered_hpas.append({
+                "name": item.metadata.name,
+                "target": {
+                    "api_version": target.api_version,
+                    "kind": target.kind,
+                    "name": target.name,
+                },
+                "min_replicas": item.spec.min_replicas,
+                "max_replicas": item.spec.max_replicas,
+                "metrics": self.api_client.sanitize_for_serialization(item.spec.metrics or []),
+                "current_replicas": item.status.current_replicas,
+                "desired_replicas": item.status.desired_replicas,
+                "current_metrics": self.api_client.sanitize_for_serialization(item.status.current_metrics or []),
+                "conditions": self.api_client.sanitize_for_serialization(item.status.conditions or []),
+            })
+
+        return {
+            "namespace": namespace,
+            "horizontal_pod_autoscalers": filtered_hpas[:50],
+            "pod_disruption_budgets": [
+                {
+                    "name": item.metadata.name,
+                    "selector": self.api_client.sanitize_for_serialization(item.spec.selector),
+                    "min_available": item.spec.min_available,
+                    "max_unavailable": item.spec.max_unavailable,
+                    "current_healthy": item.status.current_healthy,
+                    "desired_healthy": item.status.desired_healthy,
+                    "disruptions_allowed": item.status.disruptions_allowed,
+                    "expected_pods": item.status.expected_pods,
+                    "conditions": self.api_client.sanitize_for_serialization(item.status.conditions or []),
+                }
+                for item in pdbs.items[:50]
+            ],
+        }
