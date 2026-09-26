@@ -1,3 +1,6 @@
+from kubernetes import client
+
+from app.integrations.kubernetes.provider import KubernetesProvider
 from app.rca.evidence_collector import EvidenceCollector
 from app.rca.evidence_reducer import EvidenceReducer
 from app.rca.rca_models import RCAResult
@@ -134,3 +137,36 @@ def test_namespace_health_flags_zero_ready_oomkilled_pod():
     assert pod["ready_container_count"] == 0
     assert any("0/1" in reason for reason in pod["health_reasons"])
     assert any("OOMKilled" in reason for reason in pod["health_reasons"])
+
+
+def test_container_diagnostics_expose_resources_but_redact_literal_env_values():
+    container = client.V1Container(
+        name="payment",
+        image="payment:latest",
+        resources=client.V1ResourceRequirements(
+            requests={"cpu": "100m", "memory": "128Mi"},
+            limits={"cpu": "500m", "memory": "256Mi"},
+        ),
+        env=[
+            client.V1EnvVar(name="PLAIN_PASSWORD", value="must-not-leak"),
+            client.V1EnvVar(
+                name="API_TOKEN",
+                value_from=client.V1EnvVarSource(
+                    secret_key_ref=client.V1SecretKeySelector(
+                        name="payment-secret",
+                        key="api-token",
+                    )
+                ),
+            ),
+        ],
+    )
+
+    summary = KubernetesProvider._container_spec_summary(container)
+
+    assert summary["resources"]["requests"]["memory"] == "128Mi"
+    assert summary["resources"]["limits"]["memory"] == "256Mi"
+    assert summary["env"][0]["value"] == "<redacted>"
+    assert "must-not-leak" not in str(summary)
+    assert summary["env"][1]["source"] == "secret_key_ref"
+    assert summary["env"][1]["secret_name"] == "payment-secret"
+    assert summary["env"][1]["key"] == "api-token"
