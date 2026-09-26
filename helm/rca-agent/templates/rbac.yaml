@@ -6,6 +6,12 @@ metadata:
   labels:
     {{- include "rca-agent.labels" . | nindent 4 }}
 rules:
+  - nonResourceURLs:
+      - /api
+      - /apis
+      - /api/*
+      - /apis/*
+    verbs: ["get"]
   - apiGroups: [""]
     resources:
       - namespaces

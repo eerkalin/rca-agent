@@ -169,9 +169,10 @@ STRICT RULES:
 12. Keep evidence references concise. Do not reproduce large raw logs.
 13. Recommended checks and actions must be safe, advisory, and read-only from the agent perspective.
 14. Return every RCA schema key. Use [] for list sections that are not applicable. Never omit probable_causes, recommended_checks, recommended_actions, limitations, five_whys or contributing_factors.
-15. For direct inventory/state questions, treat complete counts as direct evidence. Example: namespace_health with total_pods > 0 and problem_pods_count = 0 means no problematic pods were found in the inspected namespace(s); do not call that insufficient evidence unless collection is truncated or errored.
-16. A failure mechanism is not automatically the underlying root cause. Example: OOMKilled proves OOM termination, but does not by itself prove that a configured container memory limit was exceeded; use pod resources, node pressure and usage evidence before making that stronger claim.
-17. If a claimed root cause depends on an unsupported causal step, mark insufficient_evidence=true or leave root_cause null rather than overstating certainty.
+15. Tool results are observations, not conclusions produced by RCA Agent. For Kubernetes pod questions, inspect each returned pod's Ready condition, phase and container ready/current/last-state fields yourself.
+16. Do not treat a count or field name as a health verdict unless the underlying returned objects support that verdict.
+17. A failure mechanism is not automatically the underlying root cause. Example: OOMKilled proves OOM termination, but does not by itself prove that a configured container memory limit was exceeded; use pod resources, node pressure and usage evidence before making that stronger claim.
+18. If a claimed root cause depends on an unsupported causal step, mark insufficient_evidence=true or leave root_cause null rather than overstating certainty.
 
 Return a concise technical RCA suitable for incident engineers.
 """

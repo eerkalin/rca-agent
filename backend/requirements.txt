@@ -3,7 +3,7 @@ SQLAlchemy
 PyMySQL
 pydantic-settings
 alembic
-kubernetes
+kubernetes==36.0.3
 PyYAML
 google-genai
 cryptography

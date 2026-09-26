@@ -11,6 +11,7 @@ class EvidenceReducer:
     MAX_TRACE_SEARCH_HITS = 40
     MAX_TRACES = 5
     MAX_TRACE_DOCUMENTS = 80
+    MAX_TRANSPORT_LIST_ITEMS = 250
 
     @staticmethod
     def _redact_text(value: str) -> str:
@@ -79,7 +80,7 @@ class EvidenceReducer:
     @classmethod
     def _bounded_value(cls, value, *, depth: int = 0):
         """Bound provider-produced diagnostic JSON before it is placed in the LLM transcript."""
-        if depth > 8:
+        if depth > 16:
             return "[nested diagnostic data truncated]"
         if isinstance(value, dict):
             result = {}
@@ -90,7 +91,7 @@ class EvidenceReducer:
                 result[key] = cls._bounded_value(child, depth=depth + 1)
             return result
         if isinstance(value, list):
-            items = value[:80]
+            items = value[: cls.MAX_TRANSPORT_LIST_ITEMS]
             result = [cls._bounded_value(child, depth=depth + 1) for child in items]
             if len(value) > len(items):
                 result.append({"_truncated_items": len(value) - len(items)})
@@ -101,6 +102,16 @@ class EvidenceReducer:
                 return value[:8000] + "\n[diagnostic text truncated]"
             return value
         return value
+
+    @classmethod
+    def transport(cls, evidence: list[dict]) -> list[dict]:
+        """Prepare provider results for LLM transport without semantic interpretation.
+
+        This method only redacts likely credentials and applies size/depth bounds.
+        It intentionally preserves provider field names and values so the LLM,
+        not RCA Agent, decides what the observations mean.
+        """
+        return cls._bounded_value(cls.redact_untrusted(evidence))
 
     @classmethod
     def _reduce_kubernetes(cls, item: dict) -> dict:

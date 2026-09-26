@@ -159,6 +159,26 @@ class EvidenceCollector:
             "logs": logs,
         }
 
+    def collect_namespace_pods(
+        self,
+        kubernetes: KubernetesProvider,
+        namespaces: list[str],
+    ) -> dict:
+        """Return raw pod/container status summaries for the LLM to interpret.
+
+        RCA Agent intentionally does not classify pods as healthy/unhealthy here.
+        """
+        ToolPolicy.assert_allowed("kubernetes", "list_pods")
+        items = []
+        for namespace in namespaces:
+            snapshot = kubernetes.list_namespace_pod_statuses(namespace=namespace)
+            items.append(snapshot)
+        return {
+            "scope": "list_pods",
+            "namespaces": items,
+            "total_pods": sum(item.get("total_pods", 0) for item in items),
+        }
+
     def collect_namespace_health(
         self,
         kubernetes: KubernetesProvider,

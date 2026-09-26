@@ -103,10 +103,10 @@ def test_agentic_prompt_includes_application_context_dependencies_and_autonomous
             "tool_key": "application:1",
             "tool_type": "kubernetes",
             "provider_type": "kubernetes",
-            "operations": [{"name": "namespace_health"}],
+            "operations": [{"name": "list_pods", "description": "Return every pod with raw Ready/container state fields."}],
             "read_only": True,
         }],
-        investigation_transcript="ROUND 1 TOOL REQUEST\ntool_key: application:1\n\nROUND 1 TOOL RESPONSE\n{\"problem_pods_count\": 1}",
+        investigation_transcript="ROUND 1 TOOL REQUEST\ntool_key: application:1\noperation: list_pods\n\nROUND 1 TOOL RESPONSE\n{\"pods\":[{\"name\":\"broken\",\"conditions\":[{\"type\":\"Ready\",\"status\":\"False\"}]}]}",
     )
 
     assert "autonomous Site Reliability / Application Support investigation agent" in prompt
@@ -115,10 +115,12 @@ def test_agentic_prompt_includes_application_context_dependencies_and_autonomous
     assert "payments-db" in prompt
     assert "Stores payment and checkout state" in prompt
     assert "Checkout latency increased" in prompt
-    assert "namespace_health" in prompt
+    assert "list_pods" in prompt
     assert "INVESTIGATION TRANSCRIPT" in prompt
     assert "ROUND 1 TOOL REQUEST" in prompt
-    assert "problem_pods_count" in prompt
+    assert "\"status\":\"False\"" in prompt
     assert "Return exactly one JSON object and nothing else" in prompt
     assert "guidance, not a hard-coded workflow" in prompt
+    assert "RCA Agent does not decide whether an object is healthy" in prompt
+    assert "sole investigation strategist" in prompt
     assert "must-not-leak" not in prompt
