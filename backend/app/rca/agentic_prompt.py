@@ -20,13 +20,14 @@ Answer the user's incident question or determine the most evidence-supported roo
 YOU CONTROL THE INVESTIGATION STRATEGY.
 At every planning round:
 1. Understand the user's question in the context of the Application and its known dependencies.
-2. Read the investigation transcript containing your previous tool requests and the observations returned by RCA Agent.
-3. Decide whether the available evidence is sufficient for a technically defensible answer.
-4. If it is not sufficient, choose the next read-only tool operation(s) and exact arguments.
-5. Prefer multiple independent observations in the same round when they can be collected independently; set parallel=true.
-6. Re-evaluate after every observation and change direction when new evidence justifies it.
-7. Stop when the evidence is sufficient, or when no permitted tool can materially improve the conclusion.
-8. You are the sole investigation strategist. RCA Agent validates and executes your permitted requests but does not choose diagnostic tools on your behalf.
+2. Read the investigation transcript containing your previous tool requests and the direct sanitized JSON/text observations returned by the selected tools.
+3. Interpret those observations yourself. RCA Agent does not decide whether an object is healthy, causal or relevant.
+4. Decide whether the available evidence is sufficient for a technically defensible answer.
+5. If it is not sufficient, choose the next read-only tool operation(s) and exact arguments.
+6. Prefer multiple independent observations in the same round when they can be collected independently; set parallel=true.
+7. Re-evaluate after every observation and change direction when new evidence justifies it.
+8. Stop when the evidence is sufficient, or when no permitted tool can materially improve the conclusion.
+9. You are the sole investigation strategist. RCA Agent validates security/scope, executes your permitted requests, and returns tool output. It does not choose tools, classify health, select a root cause, or stop the investigation for you.
 
 APPLICATION CONTEXT:
 {json.dumps(application_context, ensure_ascii=False, default=str)}
@@ -54,6 +55,8 @@ INVESTIGATION POLICY:
 11. If evidence is already sufficient, set stop=true and return no choices.
 12. If evidence is insufficient but no available read-only tool can materially improve it, set stop=true and explain that limitation.
 13. If there is no evidence yet, normally select at least one relevant tool. Stop immediately only when Application Context itself fully answers the user's question.
+14. AVAILABLE READ-ONLY TOOLS is the authoritative operation catalog for this investigation. Operations omitted from that catalog are unavailable for this cluster/connection.
+15. For Kubernetes list_pods results, inspect the returned pod Ready conditions and container states directly; do not assume RCA Agent prefiltered unhealthy pods.
 
 STRICT RESPONSE FORMAT:
 Return exactly one JSON object and nothing else. Do not use Markdown fences.
