@@ -269,13 +269,138 @@ class RCAOrchestrator:
             namespaces = [str(config["namespace"]).strip()]
         return namespaces
 
-    def _agentic_tool_catalog(self, context: dict) -> tuple[list[dict], dict[str, tuple[dict, dict | None]]]:
+    @classmethod
+    def _agentic_operations_for_tool(cls, tool: dict) -> list[dict]:
+        tool_type = tool.get("tool_type")
+        provider_type = tool.get("provider_type")
+
+        if tool_type == "kubernetes" and provider_type == "kubernetes":
+            return [
+                {
+                    "name": "namespace_health",
+                    "description": "Inspect readiness/current container state across one configured namespace or all configured namespaces.",
+                    "arguments": {"operation": "namespace_health", "namespace": "optional configured namespace"},
+                },
+                {
+                    "name": "list_pods",
+                    "description": "List bounded pod status/readiness/restarts in one configured namespace without logs.",
+                    "arguments": {"operation": "list_pods", "namespace": "required configured namespace", "limit": "optional integer, max 100"},
+                },
+                {
+                    "name": "pod_status",
+                    "description": "Inspect the current status of one exact pod without reading logs.",
+                    "arguments": {"operation": "pod_status", "namespace": "required configured namespace", "pod_name": "required exact pod name"},
+                },
+                {
+                    "name": "pod_logs",
+                    "description": "Read bounded current or previous logs from one exact pod/container.",
+                    "arguments": {
+                        "operation": "pod_logs",
+                        "namespace": "required configured namespace",
+                        "pod_name": "required exact pod name",
+                        "container_name": "optional exact container name",
+                        "tail_lines": "optional integer, max 500 and bounded by Application config",
+                        "previous": "optional boolean",
+                    },
+                },
+                {
+                    "name": "resource_events",
+                    "description": "Read Kubernetes Events for one exact in-scope resource.",
+                    "arguments": {
+                        "operation": "resource_events",
+                        "namespace": "required configured namespace",
+                        "resource_kind": "optional Pod, Service, Deployment, StatefulSet, or DaemonSet",
+                        "resource_name": "required exact resource name",
+                    },
+                },
+                {
+                    "name": "pod_diagnostics",
+                    "description": "Inspect one exact pod from prior evidence: status, events and bounded current/previous logs.",
+                    "arguments": {"operation": "pod_diagnostics", "namespace": "required configured namespace", "pod_name": "required exact pod name"},
+                },
+                {
+                    "name": "service_diagnostics",
+                    "description": "Inspect one Kubernetes Service and its selected pods/endpoints/logs/events.",
+                    "arguments": {"operation": "service_diagnostics", "namespace": "required configured namespace", "service_name": "required exact service name"},
+                },
+                {
+                    "name": "workload_inventory",
+                    "description": "List Deployments, StatefulSets and DaemonSets with rollout/readiness status and container images. Secret-bearing configuration is omitted.",
+                    "arguments": {"operation": "workload_inventory", "namespace": "required configured namespace", "limit": "optional integer, max 100"},
+                },
+                {
+                    "name": "workload_configuration",
+                    "description": "Inspect safe rollout/container/resource/probe configuration for one Deployment, StatefulSet or DaemonSet. Environment values, Secret/ConfigMap refs and service-account identity are not exposed.",
+                    "arguments": {
+                        "operation": "workload_configuration",
+                        "namespace": "required configured namespace",
+                        "resource_kind": "required Deployment, StatefulSet, or DaemonSet",
+                        "resource_name": "required exact workload name",
+                    },
+                },
+            ]
+
+        if tool_type == "metrics" and provider_type == "prometheus":
+            return [
+                {
+                    "name": "configured_metrics",
+                    "description": "Run the Application's preconfigured Prometheus queries.",
+                    "arguments": {"operation": "configured_metrics"},
+                },
+                {
+                    "name": "promql",
+                    "description": "Run one read-only PromQL query chosen by the LLM.",
+                    "arguments": {
+                        "operation": "promql",
+                        "promql": "required PromQL string",
+                        "mode": "optional instant or range",
+                        "window_minutes": "optional integer, max 120",
+                        "step": "optional Prometheus step such as 30s",
+                    },
+                },
+            ]
+
+        if tool_type == "logs" and provider_type in {"elasticsearch", "elastic"}:
+            return [{
+                "name": "search_logs",
+                "description": "Search configured read-only log indices. Index pattern remains fixed by Application configuration.",
+                "arguments": {
+                    "operation": "search_logs",
+                    "search_text": "optional text query",
+                    "service_name": "optional exact service name",
+                    "namespace": "optional namespace",
+                    "lookback_minutes": "optional integer, max 120",
+                    "size": "optional integer, max configured size",
+                },
+            }]
+
+        if tool_type == "traces" and provider_type == "elastic_apm":
+            return [{
+                "name": "search_traces",
+                "description": "Search configured Elastic APM trace indices and load bounded candidate traces.",
+                "arguments": {
+                    "operation": "search_traces",
+                    "service_name": "optional exact service name",
+                    "namespace": "optional namespace",
+                    "lookback_minutes": "optional integer, max 120",
+                },
+            }]
+
+        return [{
+            "name": "configured_collection",
+            "description": "Execute this configured read-only diagnostic binding.",
+            "arguments": {"operation": "configured_collection"},
+        }]
+
+    @classmethod
+    def _agentic_tool_catalog(cls, context: dict) -> tuple[list[dict], dict[str, tuple[dict, dict | None]]]:
         catalog: list[dict] = []
         bindings: dict[str, tuple[dict, dict | None]] = {}
 
         for tool in context["tools"]:
             key = f"application:{tool['id']}"
             bindings[key] = (tool, None)
+            safe_context = cls._safe_tool_context(tool)
             descriptor = {
                 "tool_key": key,
                 "scope": "application",
@@ -283,97 +408,21 @@ class RCAOrchestrator:
                 "provider_type": tool.get("provider_type"),
                 "priority": tool.get("priority"),
                 "read_only": True,
+                "safe_scope": safe_context.get("configured_scope", {}),
+                "operations": cls._agentic_operations_for_tool(tool),
             }
             if tool.get("tool_type") == "kubernetes" and tool.get("provider_type") == "kubernetes":
-                namespaces = self._configured_namespaces(tool)
-                descriptor.update({
-                    "description": "Read-only Kubernetes inspection for configured Application namespaces.",
-                    "allowed_namespaces": namespaces,
-                    "operations": [
-                        {
-                            "name": "namespace_health",
-                            "description": "List pod readiness/current container state for one configured namespace or all configured namespaces.",
-                            "arguments": {"operation": "namespace_health", "namespace": "optional configured namespace"},
-                        },
-                        {
-                            "name": "pod_diagnostics",
-                            "description": "Inspect one exact pod from prior evidence: pod status, events and bounded current/previous logs.",
-                            "arguments": {"operation": "pod_diagnostics", "namespace": "required configured namespace", "pod_name": "required exact pod name"},
-                        },
-                        {
-                            "name": "service_diagnostics",
-                            "description": "Inspect one Kubernetes Service and its selected pods/endpoints/logs/events.",
-                            "arguments": {"operation": "service_diagnostics", "namespace": "required configured namespace", "service_name": "required exact service name"},
-                        },
-                    ],
-                })
+                descriptor["description"] = "Read-only Kubernetes inspection for configured Application namespaces."
+                descriptor["allowed_namespaces"] = cls._configured_namespaces(tool)
             else:
-                config = tool.get("config") or {}
-                provider_type = tool.get("provider_type")
-                tool_type = tool.get("tool_type")
-                operations = []
-                if tool_type == "metrics" and provider_type == "prometheus":
-                    operations = [
-                        {
-                            "name": "configured_metrics",
-                            "description": "Run the Application's preconfigured Prometheus queries.",
-                            "arguments": {"operation": "configured_metrics"},
-                        },
-                        {
-                            "name": "promql",
-                            "description": "Run one read-only PromQL query chosen by the LLM.",
-                            "arguments": {
-                                "operation": "promql",
-                                "promql": "required PromQL string",
-                                "mode": "optional instant or range",
-                                "window_minutes": "optional integer, max 120",
-                                "step": "optional Prometheus step such as 30s",
-                            },
-                        },
-                    ]
-                elif tool_type == "logs" and provider_type in {"elasticsearch", "elastic"}:
-                    operations = [{
-                        "name": "search_logs",
-                        "description": "Search configured read-only log indices. Index pattern remains fixed by Application configuration.",
-                        "arguments": {
-                            "operation": "search_logs",
-                            "search_text": "optional text query",
-                            "service_name": "optional exact service name",
-                            "namespace": "optional namespace",
-                            "lookback_minutes": "optional integer, max 120",
-                            "size": "optional integer, max configured size",
-                        },
-                    }]
-                elif tool_type == "traces" and provider_type == "elastic_apm":
-                    operations = [{
-                        "name": "search_traces",
-                        "description": "Search configured Elastic APM trace indices and load bounded candidate traces.",
-                        "arguments": {
-                            "operation": "search_traces",
-                            "service_name": "optional exact service name",
-                            "namespace": "optional namespace",
-                            "lookback_minutes": "optional integer, max 120",
-                        },
-                    }]
-                descriptor.update({
-                    "description": "Read-only observability binding. The LLM chooses one listed operation and its bounded arguments.",
-                    "config_summary": {
-                        key: value
-                        for key, value in config.items()
-                        if key not in {"queries", "filters", "source_fields", "message_fields"}
-                    },
-                    "operations": operations or [{
-                        "name": "configured_collection",
-                        "description": "Execute this configured read-only diagnostic binding.",
-                        "arguments": {"operation": "configured_collection"},
-                    }],
-                })
+                descriptor["description"] = "Read-only observability binding. The LLM chooses one listed operation and bounded arguments."
             catalog.append(descriptor)
 
         for dependency in context["dependencies"]:
             for tool in dependency.get("tools", []):
                 key = f"dependency:{dependency['id']}:{tool['id']}"
                 bindings[key] = (tool, dependency)
+                safe_context = cls._safe_tool_context(tool)
                 catalog.append({
                     "tool_key": key,
                     "scope": "dependency",
@@ -385,9 +434,9 @@ class RCAOrchestrator:
                     },
                     "tool_type": tool.get("tool_type"),
                     "provider_type": tool.get("provider_type"),
-                    "description": "Execute this configured read-only dependency diagnostic binding.",
-                    "config": tool.get("config") or {},
-                    "arguments": {},
+                    "description": "Read-only dependency diagnostic binding. Use it only when the dependency is relevant to current evidence.",
+                    "safe_scope": safe_context.get("configured_scope", {}),
+                    "operations": cls._agentic_operations_for_tool(tool),
                     "read_only": True,
                 })
 
