@@ -365,37 +365,27 @@ class KubernetesProvider:
                 state = "unknown"
                 reason = None
 
-                if status.state.running:
+                current_state = getattr(status, "state", None)
+                if current_state and current_state.running:
                     state = "running"
 
-                elif status.state.waiting:
+                elif current_state and current_state.waiting:
                     state = "waiting"
-                    reason = (
-                        status.state.waiting.reason
-                    )
+                    reason = current_state.waiting.reason
 
-                elif status.state.terminated:
+                elif current_state and current_state.terminated:
                     state = "terminated"
-                    reason = (
-                        status.state.terminated.reason
-                    )
+                    reason = current_state.terminated.reason
 
                 last_state = None
                 last_reason = None
                 last_exit_code = None
 
-                if status.last_state.terminated:
+                previous_state = getattr(status, "last_state", None)
+                if previous_state and previous_state.terminated:
                     last_state = "terminated"
-
-                    last_reason = (
-                        status.last_state
-                        .terminated.reason
-                    )
-
-                    last_exit_code = (
-                        status.last_state
-                        .terminated.exit_code
-                    )
+                    last_reason = previous_state.terminated.reason
+                    last_exit_code = previous_state.terminated.exit_code
 
                 container_statuses.append(
                     {
