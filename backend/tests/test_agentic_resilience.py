@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from app.rca.agentic_models import AgenticDecision, parse_agentic_decision_text
 from app.rca.evidence_reducer import EvidenceReducer
+from app.rca.orchestrator import RCAOrchestrator
 from app.rca.tool_policy import ToolPolicy
 from app.rca.rca_normalizer import normalize_rca_payload
 
@@ -126,13 +127,13 @@ def test_agentic_arguments_drop_unknown_fields_before_execution():
 
 
 def test_agentic_decision_parses_strict_json_text_without_provider_schema():
-    decision = parse_agentic_decision_text('{"stop":false,"parallel":true,"reason":"Inspect namespace","choices":[{"tool_key":"application:1","reason":"Need current pod health","arguments":{"operation":"namespace_health","namespace":"application"}}]}')
+    decision = parse_agentic_decision_text('{"stop":false,"parallel":true,"reason":"Inspect namespace","choices":[{"tool_key":"application:1","reason":"Need current pod health","arguments":{"operation":"list_pods","namespace":"application"}}]}')
 
     assert decision.stop is False
     assert decision.parallel is True
     assert decision.choices[0].tool_key == "application:1"
     assert decision.choices[0].arguments_dict() == {
-        "operation": "namespace_health",
+        "operation": "list_pods",
         "namespace": "application",
     }
 
@@ -184,7 +185,10 @@ def test_agentic_orchestrator_never_bootstraps_a_tool_for_the_llm():
 
     assert "Safe deterministic bootstrap" not in source
     assert "safe bootstrap because the planner returned no executable tool choice" not in source
-    assert "RCA Agent did not choose a tool on the LLM's behalf" in source
+    assert "No tool was chosen by RCA Agent" in source
+    assert "identical tool call already exists in the transcript" not in source
+    assert 'or "namespace_health"' not in source
+    assert "EvidenceReducer.transport(observations)" in source
 
 
 def test_helm_kubernetes_reader_never_grants_secret_or_mutation_access():
@@ -213,3 +217,57 @@ def test_nested_persisted_evidence_is_redacted():
 
     assert "very-secret" not in redacted["event"]
     assert "hidden-value" not in redacted["nested"][0]["message"]
+
+
+def test_kubernetes_catalog_exposes_raw_pod_listing_and_filters_missing_metrics_api():
+    operations = RCAOrchestrator._kubernetes_operations({
+        "core_v1": True,
+        "apps_v1": True,
+        "batch_v1": True,
+        "networking_v1": True,
+        "storage_v1": True,
+        "autoscaling_v2": True,
+        "policy_v1": True,
+        "metrics_v1beta1": False,
+    })
+    names = {item["name"] for item in operations}
+
+    assert "list_pods" in names
+    assert "namespace_health" not in names
+    assert "pod_diagnostics" in names
+    assert "resource_usage" not in names
+
+
+def test_agentic_transport_preserves_raw_kubernetes_pods_without_health_classification():
+    evidence = [{
+        "tool": {"id": 1, "tool_type": "kubernetes", "provider_type": "kubernetes"},
+        "kubernetes": {
+            "scope": "list_pods",
+            "total_pods": 2,
+            "namespaces": [{
+                "namespace": "otel-demo",
+                "total_pods": 2,
+                "pods": [
+                    {
+                        "name": "ready",
+                        "phase": "Running",
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                        "containers": [{"name": "app", "ready": True, "state": "running"}],
+                    },
+                    {
+                        "name": "broken",
+                        "phase": "Running",
+                        "conditions": [{"type": "Ready", "status": "False", "reason": "ContainersNotReady"}],
+                        "containers": [{"name": "app", "ready": False, "state": "waiting", "reason": "CrashLoopBackOff"}],
+                    },
+                ],
+            }],
+        },
+    }]
+
+    transported = EvidenceReducer.transport(evidence)
+
+    pods = transported[0]["kubernetes"]["namespaces"][0]["pods"]
+    assert [pod["name"] for pod in pods] == ["ready", "broken"]
+    assert pods[1]["conditions"][0]["status"] == "False"
+    assert "problem_pods_count" not in transported[0]["kubernetes"]
