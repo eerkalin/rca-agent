@@ -889,96 +889,112 @@ class KubernetesProvider:
             })
         return item
 
+    @staticmethod
+    def _safe_discovery_section(loader) -> dict:
+        try:
+            return {"available": True, "items": loader(), "error": None}
+        except Exception as exc:
+            return {"available": False, "items": [], "error": str(exc)}
+
     def get_namespace_deep_inventory(self, namespace: str) -> dict:
-        """Return bounded resource discovery metadata without Secret/ConfigMap contents."""
-        inventory = self.get_inventory(namespace=namespace)
-        jobs = self.batch_v1.list_namespaced_job(namespace=namespace)
-        cronjobs = self.batch_v1.list_namespaced_cron_job(namespace=namespace)
-        pvcs = self.core_v1.list_namespaced_persistent_volume_claim(namespace=namespace)
-        ingresses = self.networking_v1.list_namespaced_ingress(namespace=namespace)
-        hpas = self.autoscaling_v2.list_namespaced_horizontal_pod_autoscaler(namespace=namespace)
-        pdbs = self.policy_v1.list_namespaced_pod_disruption_budget(namespace=namespace)
+        """Return bounded resource discovery metadata without interpreting health.
+
+        Each optional API family is isolated so one missing/disabled API does not
+        erase the rest of the namespace inventory.
+        """
+        deployments = self._safe_discovery_section(lambda: self.list_deployments(namespace)[:100])
+        statefulsets = self._safe_discovery_section(lambda: self.list_statefulsets(namespace)[:100])
+        daemonsets = self._safe_discovery_section(lambda: self.list_daemonsets(namespace)[:100])
+        services = self._safe_discovery_section(lambda: self.list_services(namespace)[:100])
+
+        jobs = self._safe_discovery_section(lambda: [
+            {
+                "name": item.metadata.name,
+                "owner_references": self._owner_references(item.metadata),
+                "active": getattr(item.status, "active", None),
+                "succeeded": getattr(item.status, "succeeded", None),
+                "failed": getattr(item.status, "failed", None),
+                "conditions": self.api_client.sanitize_for_serialization(
+                    getattr(item.status, "conditions", None) or []
+                ),
+            }
+            for item in self.batch_v1.list_namespaced_job(namespace=namespace).items[:100]
+        ])
+        cronjobs = self._safe_discovery_section(lambda: [
+            {
+                "name": item.metadata.name,
+                "suspend": item.spec.suspend,
+                "schedule": item.spec.schedule,
+                "last_schedule_time": (
+                    item.status.last_schedule_time.isoformat()
+                    if item.status and item.status.last_schedule_time else None
+                ),
+                "active_jobs": [
+                    ref.name for ref in ((item.status.active or []) if item.status else [])
+                ],
+            }
+            for item in self.batch_v1.list_namespaced_cron_job(namespace=namespace).items[:100]
+        ])
+        pvcs = self._safe_discovery_section(lambda: [
+            {
+                "name": item.metadata.name,
+                "phase": item.status.phase if item.status else None,
+                "storage_class_name": item.spec.storage_class_name,
+                "volume_name": item.spec.volume_name,
+                "access_modes": list(item.spec.access_modes or []),
+                "requested": dict(
+                    (item.spec.resources.requests or {})
+                    if item.spec.resources else {}
+                ),
+                "capacity": dict(
+                    (item.status.capacity or {})
+                    if item.status else {}
+                ),
+            }
+            for item in self.core_v1.list_namespaced_persistent_volume_claim(namespace=namespace).items[:100]
+        ])
+        ingresses = self._safe_discovery_section(lambda: [
+            {
+                "name": item.metadata.name,
+                "ingress_class_name": item.spec.ingress_class_name,
+                "hosts": [rule.host for rule in (item.spec.rules or []) if rule.host],
+            }
+            for item in self.networking_v1.list_namespaced_ingress(namespace=namespace).items[:100]
+        ])
+        hpas = self._safe_discovery_section(lambda: [
+            {
+                "name": item.metadata.name,
+                "target_kind": item.spec.scale_target_ref.kind,
+                "target_name": item.spec.scale_target_ref.name,
+                "current_replicas": item.status.current_replicas if item.status else None,
+                "desired_replicas": item.status.desired_replicas if item.status else None,
+            }
+            for item in self.autoscaling_v2.list_namespaced_horizontal_pod_autoscaler(namespace=namespace).items[:100]
+        ])
+        pdbs = self._safe_discovery_section(lambda: [
+            {
+                "name": item.metadata.name,
+                "current_healthy": item.status.current_healthy if item.status else None,
+                "desired_healthy": item.status.desired_healthy if item.status else None,
+                "disruptions_allowed": item.status.disruptions_allowed if item.status else None,
+            }
+            for item in self.policy_v1.list_namespaced_pod_disruption_budget(namespace=namespace).items[:100]
+        ])
+
         return {
             "namespace": namespace,
-            "deployments": inventory.get("deployments", [])[:100],
-            "statefulsets": inventory.get("statefulsets", [])[:100],
-            "daemonsets": inventory.get("daemonsets", [])[:100],
-            "services": inventory.get("services", [])[:100],
-            "jobs": [
-                {
-                    "name": item.metadata.name,
-                    "owner_references": self._owner_references(item.metadata),
-                    "active": getattr(item.status, "active", None),
-                    "succeeded": getattr(item.status, "succeeded", None),
-                    "failed": getattr(item.status, "failed", None),
-                    "conditions": self.api_client.sanitize_for_serialization(
-                        getattr(item.status, "conditions", None) or []
-                    ),
-                }
-                for item in jobs.items[:100]
-            ],
-            "cronjobs": [
-                {
-                    "name": item.metadata.name,
-                    "suspend": item.spec.suspend,
-                    "schedule": item.spec.schedule,
-                    "last_schedule_time": (
-                        item.status.last_schedule_time.isoformat()
-                        if item.status and item.status.last_schedule_time else None
-                    ),
-                    "active_jobs": [
-                        ref.name for ref in ((item.status.active or []) if item.status else [])
-                    ],
-                }
-                for item in cronjobs.items[:100]
-            ],
-            "persistent_volume_claims": [
-                {
-                    "name": item.metadata.name,
-                    "phase": item.status.phase if item.status else None,
-                    "storage_class_name": item.spec.storage_class_name,
-                    "volume_name": item.spec.volume_name,
-                    "access_modes": list(item.spec.access_modes or []),
-                    "requested": dict(
-                        (item.spec.resources.requests or {})
-                        if item.spec.resources else {}
-                    ),
-                    "capacity": dict(
-                        (item.status.capacity or {})
-                        if item.status else {}
-                    ),
-                }
-                for item in pvcs.items[:100]
-            ],
-            "ingresses": [
-                {
-                    "name": item.metadata.name,
-                    "ingress_class_name": item.spec.ingress_class_name,
-                    "hosts": [
-                        rule.host for rule in (item.spec.rules or []) if rule.host
-                    ],
-                }
-                for item in ingresses.items[:100]
-            ],
-            "horizontal_pod_autoscalers": [
-                {
-                    "name": item.metadata.name,
-                    "target_kind": item.spec.scale_target_ref.kind,
-                    "target_name": item.spec.scale_target_ref.name,
-                    "current_replicas": item.status.current_replicas if item.status else None,
-                    "desired_replicas": item.status.desired_replicas if item.status else None,
-                }
-                for item in hpas.items[:100]
-            ],
-            "pod_disruption_budgets": [
-                {
-                    "name": item.metadata.name,
-                    "current_healthy": item.status.current_healthy if item.status else None,
-                    "desired_healthy": item.status.desired_healthy if item.status else None,
-                    "disruptions_allowed": item.status.disruptions_allowed if item.status else None,
-                }
-                for item in pdbs.items[:100]
-            ],
+            "sections": {
+                "deployments": deployments,
+                "statefulsets": statefulsets,
+                "daemonsets": daemonsets,
+                "services": services,
+                "jobs": jobs,
+                "cronjobs": cronjobs,
+                "persistent_volume_claims": pvcs,
+                "ingresses": ingresses,
+                "horizontal_pod_autoscalers": hpas,
+                "pod_disruption_budgets": pdbs,
+            },
         }
 
     def get_pod_deep_diagnostics(self, namespace: str, pod_name: str) -> dict:
@@ -1427,34 +1443,38 @@ class KubernetesProvider:
         }
 
     def get_autoscaling_diagnostics(self, namespace: str, workload_name: str | None = None) -> dict:
-        hpas = self.autoscaling_v2.list_namespaced_horizontal_pod_autoscaler(namespace=namespace)
-        pdbs = self.policy_v1.list_namespaced_pod_disruption_budget(namespace=namespace)
-
+        hpa_error = None
+        pdb_error = None
         filtered_hpas = []
-        for item in hpas.items:
-            target = item.spec.scale_target_ref
-            if workload_name and target.name != workload_name:
-                continue
-            filtered_hpas.append({
-                "name": item.metadata.name,
-                "target": {
-                    "api_version": target.api_version,
-                    "kind": target.kind,
-                    "name": target.name,
-                },
-                "min_replicas": item.spec.min_replicas,
-                "max_replicas": item.spec.max_replicas,
-                "metrics": self.api_client.sanitize_for_serialization(item.spec.metrics or []),
-                "current_replicas": item.status.current_replicas,
-                "desired_replicas": item.status.desired_replicas,
-                "current_metrics": self.api_client.sanitize_for_serialization(item.status.current_metrics or []),
-                "conditions": self.api_client.sanitize_for_serialization(item.status.conditions or []),
-            })
+        pdb_items = []
 
-        return {
-            "namespace": namespace,
-            "horizontal_pod_autoscalers": filtered_hpas[:50],
-            "pod_disruption_budgets": [
+        try:
+            hpas = self.autoscaling_v2.list_namespaced_horizontal_pod_autoscaler(namespace=namespace)
+            for item in hpas.items:
+                target = item.spec.scale_target_ref
+                if workload_name and target.name != workload_name:
+                    continue
+                filtered_hpas.append({
+                    "name": item.metadata.name,
+                    "target": {
+                        "api_version": target.api_version,
+                        "kind": target.kind,
+                        "name": target.name,
+                    },
+                    "min_replicas": item.spec.min_replicas,
+                    "max_replicas": item.spec.max_replicas,
+                    "metrics": self.api_client.sanitize_for_serialization(item.spec.metrics or []),
+                    "current_replicas": item.status.current_replicas,
+                    "desired_replicas": item.status.desired_replicas,
+                    "current_metrics": self.api_client.sanitize_for_serialization(item.status.current_metrics or []),
+                    "conditions": self.api_client.sanitize_for_serialization(item.status.conditions or []),
+                })
+        except Exception as exc:
+            hpa_error = str(exc)
+
+        try:
+            pdbs = self.policy_v1.list_namespaced_pod_disruption_budget(namespace=namespace)
+            pdb_items = [
                 {
                     "name": item.metadata.name,
                     "selector": self.api_client.sanitize_for_serialization(item.spec.selector),
@@ -1467,5 +1487,14 @@ class KubernetesProvider:
                     "conditions": self.api_client.sanitize_for_serialization(item.status.conditions or []),
                 }
                 for item in pdbs.items[:50]
-            ],
+            ]
+        except Exception as exc:
+            pdb_error = str(exc)
+
+        return {
+            "namespace": namespace,
+            "horizontal_pod_autoscalers": filtered_hpas[:50],
+            "horizontal_pod_autoscalers_error": hpa_error,
+            "pod_disruption_budgets": pdb_items,
+            "pod_disruption_budgets_error": pdb_error,
         }
