@@ -1,3 +1,5 @@
+from app.rca.sensitive_data import SensitiveDataSanitizer
+
 class EvidenceReducer:
     """Reduce payload sent to the LLM while retaining full evidence in DB."""
 
@@ -189,4 +191,4 @@ class EvidenceReducer:
             if "error" in item:
                 output["error"] = item["error"]
             reduced.append(output)
-        return reduced
+        return SensitiveDataSanitizer.sanitize(reduced)
