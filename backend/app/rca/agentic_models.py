@@ -26,6 +26,34 @@ class AgenticToolArguments(BaseModel):
         default=None,
         description="Exact service name when supported by the selected operation",
     )
+    resource_kind: str | None = Field(
+        default=None,
+        description="Allowed Kubernetes resource kind such as Deployment, StatefulSet, DaemonSet, Service, or Pod",
+    )
+    resource_name: str | None = Field(
+        default=None,
+        description="Exact Kubernetes resource name discovered from context or prior evidence",
+    )
+    container_name: str | None = Field(
+        default=None,
+        description="Exact container name when requesting one container's logs",
+    )
+    tail_lines: int | None = Field(
+        default=None,
+        ge=1,
+        le=500,
+        description="Bounded number of log lines to read",
+    )
+    previous: bool | None = Field(
+        default=None,
+        description="Read previous container logs when a restart occurred",
+    )
+    limit: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="Bounded number of inventory/revision items to return",
+    )
     promql: str | None = Field(
         default=None,
         description="Read-only PromQL query for the Prometheus promql operation",
