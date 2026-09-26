@@ -296,6 +296,11 @@ class RCAOrchestrator:
                             "arguments": {"operation": "namespace_health", "namespace": "optional configured namespace"},
                         },
                         {
+                            "name": "namespace_inventory",
+                            "description": "Discover bounded names/status for workloads, Services, Jobs/CronJobs, PVCs, Ingresses, HPAs and PDBs in one configured namespace. No Secret or ConfigMap contents are read.",
+                            "arguments": {"operation": "namespace_inventory", "namespace": "required configured namespace"},
+                        },
+                        {
                             "name": "pod_diagnostics",
                             "description": "Deep inspect one exact pod: status/conditions, requests and limits, QoS, owners, probes, images, restart/termination details, safe environment references, volumes, events and bounded current/previous logs. Literal env values, Secret values, probe headers and exec commands are never exposed.",
                             "arguments": {"operation": "pod_diagnostics", "namespace": "required configured namespace", "pod_name": "required exact pod name"},
@@ -510,6 +515,7 @@ class RCAOrchestrator:
         namespaces = RCAOrchestrator._configured_namespaces(tool)
         if not namespaces:
             raise ValueError("Kubernetes tool has no configured namespace scope")
+        ToolPolicy.assert_allowed("kubernetes", "list_pods")
         for namespace in namespaces:
             pods = provider.list_pods_for_selector(namespace=namespace, selector={})
             allowed_nodes.update(
@@ -669,6 +675,17 @@ class RCAOrchestrator:
                 "agentic_arguments": {"operation": operation, "namespaces": namespaces},
                 "scope_candidate": {},
                 "kubernetes": snapshot,
+            }]
+
+        if operation == "namespace_inventory":
+            ToolPolicy.assert_allowed("kubernetes", "get_namespace_inventory")
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            snapshot = provider.get_namespace_deep_inventory(namespace=namespace)
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespace": namespace},
+                "scope_candidate": {},
+                "kubernetes": {"scope": operation, **snapshot},
             }]
 
         if operation == "pod_diagnostics":
