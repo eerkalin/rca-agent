@@ -81,5 +81,7 @@ class KubernetesProviderFactory:
         provider.discovery_v1 = client.DiscoveryV1Api(api_client)
         provider.custom_objects = client.CustomObjectsApi(api_client)
         provider.version_api = client.VersionApi(api_client)
+        provider.apis_api = client.ApisApi(api_client)
+        provider.core_api = client.CoreApi(api_client)
         provider.api_client = api_client
         return provider
