@@ -1,3 +1,5 @@
+import re
+
 class EvidenceReducer:
     """Reduce payload sent to the LLM while retaining full evidence in DB."""
 
@@ -9,6 +11,30 @@ class EvidenceReducer:
     MAX_TRACE_SEARCH_HITS = 40
     MAX_TRACES = 5
     MAX_TRACE_DOCUMENTS = 80
+
+    @staticmethod
+    def _redact_text(value: str) -> str:
+        value = re.sub(
+            r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
+            r"\1<redacted>",
+            value,
+        )
+        value = re.sub(
+            r"(?i)\b(password|passwd|token|api[_-]?key|client[_-]?secret)\b(\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;]+)",
+            r"\1\2<redacted>",
+            value,
+        )
+        value = re.sub(
+            r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
+            "<redacted-jwt>",
+            value,
+        )
+        value = re.sub(
+            r"(?i)(https?://[^\s/:]+:)[^@\s/]+@",
+            r"\1<redacted>@",
+            value,
+        )
+        return value
 
     @classmethod
     def _compact_log(cls, value: str | None) -> str | None:
@@ -24,10 +50,57 @@ class EvidenceReducer:
             seen.add(normalized)
             compact_lines.append(normalized[:2000])
         compact = "\n".join(compact_lines)
+        # Logs are untrusted evidence and may accidentally contain credentials.
+        compact = cls._redact_text(compact)
         if len(compact) > cls.MAX_LOG_CHARS:
             compact = compact[-cls.MAX_LOG_CHARS :]
             compact = "[truncated to most recent evidence]\n" + compact
         return compact
+
+    @classmethod
+    def redact_untrusted(cls, value, *, depth: int = 0):
+        """Redact common credentials before untrusted evidence is persisted or displayed."""
+        if depth > 24:
+            return "[nested evidence redacted]"
+        if isinstance(value, dict):
+            return {
+                key: cls.redact_untrusted(child, depth=depth + 1)
+                for key, child in value.items()
+            }
+        if isinstance(value, list):
+            return [
+                cls.redact_untrusted(child, depth=depth + 1)
+                for child in value
+            ]
+        if isinstance(value, str):
+            return cls._redact_text(value)
+        return value
+
+    @classmethod
+    def _bounded_value(cls, value, *, depth: int = 0):
+        """Bound provider-produced diagnostic JSON before it is placed in the LLM transcript."""
+        if depth > 8:
+            return "[nested diagnostic data truncated]"
+        if isinstance(value, dict):
+            result = {}
+            for index, (key, child) in enumerate(value.items()):
+                if index >= 120:
+                    result["_truncated_keys"] = True
+                    break
+                result[key] = cls._bounded_value(child, depth=depth + 1)
+            return result
+        if isinstance(value, list):
+            items = value[:80]
+            result = [cls._bounded_value(child, depth=depth + 1) for child in items]
+            if len(value) > len(items):
+                result.append({"_truncated_items": len(value) - len(items)})
+            return result
+        if isinstance(value, str):
+            value = cls._redact_text(value)
+            if len(value) > 8000:
+                return value[:8000] + "\n[diagnostic text truncated]"
+            return value
+        return value
 
     @classmethod
     def _reduce_kubernetes(cls, item: dict) -> dict:
@@ -46,15 +119,27 @@ class EvidenceReducer:
                 "namespace": kubernetes.get("namespace"),
                 "pod_name": kubernetes.get("pod_name"),
                 "found": kubernetes.get("found"),
-                "pod": {
+                "pod": cls._bounded_value({
                     "name": pod.get("name"),
                     "phase": pod.get("phase"),
+                    "qos_class": pod.get("qos_class"),
                     "node_name": pod.get("node_name"),
+                    "owner_references": pod.get("owner_references", []),
                     "conditions": pod.get("conditions", []),
                     "containers": pod.get("containers", []),
+                    "init_containers": pod.get("init_containers", []),
+                    "container_statuses": pod.get("container_statuses", pod.get("containers", [])),
+                    "init_container_statuses": pod.get("init_container_statuses", []),
+                    "volumes": pod.get("volumes", []),
+                    "node_selector": pod.get("node_selector", {}),
+                    "tolerations": pod.get("tolerations", []),
+                    "service_account_name": pod.get("service_account_name"),
+                    "priority_class_name": pod.get("priority_class_name"),
+                    "restart_policy": pod.get("restart_policy"),
+                    "security_context": pod.get("security_context"),
                     "desired_container_count": pod.get("desired_container_count"),
                     "ready_container_count": pod.get("ready_container_count"),
-                } if pod else None,
+                }) if pod else None,
                 "events": (kubernetes.get("events") or [])[-cls.MAX_EVENTS_PER_POD :],
                 "events_error": kubernetes.get("events_error"),
                 "logs": logs,
@@ -91,6 +176,32 @@ class EvidenceReducer:
                 "namespaces": namespaces,
             }
 
+        scope = kubernetes.get("scope")
+        if scope == "pod_logs":
+            return {
+                "scope": scope,
+                "namespace": kubernetes.get("namespace"),
+                "pod_name": kubernetes.get("pod_name"),
+                "container_name": kubernetes.get("container_name"),
+                "previous": bool(kubernetes.get("previous", False)),
+                "logs": cls._compact_log(kubernetes.get("logs")),
+            }
+
+        if scope in {
+            "namespace_inventory",
+            "pod_resources",
+            "workload_diagnostics",
+            "owner_chain",
+            "node_diagnostics",
+            "resource_usage",
+            "namespace_constraints",
+            "storage_diagnostics",
+            "networking_diagnostics",
+            "autoscaling_diagnostics",
+            "resource_events",
+        }:
+            return cls._bounded_value(kubernetes)
+
         pods = []
         for pod in kubernetes.get("pods", []):
             logs = {}
@@ -113,6 +224,8 @@ class EvidenceReducer:
             "namespace": kubernetes.get("namespace"),
             "found": kubernetes.get("found"),
             "endpoints": kubernetes.get("endpoints", []),
+            "endpoint_slices": kubernetes.get("endpoint_slices", []),
+            "endpoint_slices_error": kubernetes.get("endpoint_slices_error"),
             "pods": pods,
         }
 

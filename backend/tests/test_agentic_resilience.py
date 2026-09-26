@@ -1,6 +1,9 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.rca.agentic_models import AgenticDecision, parse_agentic_decision_text
+from app.rca.evidence_reducer import EvidenceReducer
+from app.rca.tool_policy import ToolPolicy
 from app.rca.rca_normalizer import normalize_rca_payload
 
 
@@ -81,6 +84,14 @@ def test_agentic_decision_schema_has_no_additional_properties_for_gemini_develop
         "namespace",
         "pod_name",
         "service_name",
+        "container_name",
+        "workload_name",
+        "workload_kind",
+        "node_name",
+        "pvc_name",
+        "resource_name",
+        "tail_lines",
+        "previous",
         "promql",
         "mode",
         "window_minutes",
@@ -134,3 +145,71 @@ def test_agentic_decision_parser_accepts_markdown_fence_for_provider_robustness(
 
     assert decision.stop is True
     assert decision.choices == []
+
+
+def test_log_reducer_redacts_common_credentials():
+    text = (
+        "Authorization: Bearer secret-token\n"
+        "password=hunter2\n"
+        "api_key: abc123\n"
+        "jwt eyJabcdefghijk.abcdefghijk.abcdefghijk"
+    )
+
+    compact = EvidenceReducer._compact_log(text)
+
+    assert "secret-token" not in compact
+    assert "hunter2" not in compact
+    assert "abc123" not in compact
+    assert "<redacted>" in compact
+    assert "<redacted-jwt>" in compact
+
+
+def test_kubernetes_policy_allows_deep_reads_but_denies_mutation():
+    ToolPolicy.assert_allowed("kubernetes", "get_pod_resources")
+    ToolPolicy.assert_allowed("kubernetes", "get_node")
+    ToolPolicy.assert_allowed("kubernetes", "get_storage")
+
+    import pytest
+    with pytest.raises(PermissionError):
+        ToolPolicy.assert_allowed("kubernetes", "delete_pod")
+
+
+def test_agentic_orchestrator_never_bootstraps_a_tool_for_the_llm():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "rca"
+        / "orchestrator.py"
+    ).read_text()
+
+    assert "Safe deterministic bootstrap" not in source
+    assert "safe bootstrap because the planner returned no executable tool choice" not in source
+    assert "RCA Agent did not choose a tool on the LLM's behalf" in source
+
+
+def test_helm_kubernetes_reader_never_grants_secret_or_mutation_access():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "helm"
+        / "rca-agent"
+        / "templates"
+        / "rbac.yaml"
+    ).read_text()
+
+    assert "- secrets" not in source
+    assert '"create"' not in source
+    assert '"update"' not in source
+    assert '"patch"' not in source
+    assert '"delete"' not in source
+
+
+def test_nested_persisted_evidence_is_redacted():
+    value = {
+        "event": "Authorization: Bearer very-secret",
+        "nested": [{"message": "client_secret=hidden-value"}],
+    }
+
+    redacted = EvidenceReducer.redact_untrusted(value)
+
+    assert "very-secret" not in redacted["event"]
+    assert "hidden-value" not in redacted["nested"][0]["message"]

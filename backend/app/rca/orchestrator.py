@@ -296,13 +296,73 @@ class RCAOrchestrator:
                             "arguments": {"operation": "namespace_health", "namespace": "optional configured namespace"},
                         },
                         {
+                            "name": "namespace_inventory",
+                            "description": "Discover bounded names/status for workloads, Services, Jobs/CronJobs, PVCs, Ingresses, HPAs and PDBs in one configured namespace. No Secret or ConfigMap contents are read.",
+                            "arguments": {"operation": "namespace_inventory", "namespace": "required configured namespace"},
+                        },
+                        {
                             "name": "pod_diagnostics",
-                            "description": "Inspect one exact pod from prior evidence: pod status, events and bounded current/previous logs.",
+                            "description": "Deep inspect one exact pod: status/conditions, requests and limits, QoS, owners, probes, images, restart/termination details, safe environment references, volumes, events and bounded current/previous logs. Literal env values, Secret values, probe headers and exec commands are never exposed.",
                             "arguments": {"operation": "pod_diagnostics", "namespace": "required configured namespace", "pod_name": "required exact pod name"},
                         },
                         {
+                            "name": "pod_resources",
+                            "description": "Inspect CPU/memory/ephemeral-storage requests and limits plus QoS for one exact pod.",
+                            "arguments": {"operation": "pod_resources", "namespace": "required configured namespace", "pod_name": "required exact pod name"},
+                        },
+                        {
+                            "name": "pod_logs",
+                            "description": "Read bounded logs for one exact pod/container. Can request the previous terminated container log.",
+                            "arguments": {"operation": "pod_logs", "namespace": "required configured namespace", "pod_name": "required exact pod name", "container_name": "required exact container name", "tail_lines": "optional integer max 500", "previous": "optional boolean"},
+                        },
+                        {
+                            "name": "owner_chain",
+                            "description": "Resolve controller ownership from an exact pod, for example Pod -> ReplicaSet -> Deployment or Pod -> Job.",
+                            "arguments": {"operation": "owner_chain", "namespace": "required configured namespace", "pod_name": "required exact pod name"},
+                        },
+                        {
+                            "name": "workload_diagnostics",
+                            "description": "Inspect one exact Deployment, StatefulSet, DaemonSet, ReplicaSet, Job or CronJob: rollout/status, replicas, pod template, requests/limits, probes and safe configuration references.",
+                            "arguments": {"operation": "workload_diagnostics", "namespace": "required configured namespace", "workload_kind": "required workload kind", "workload_name": "required exact workload name"},
+                        },
+                        {
+                            "name": "node_diagnostics",
+                            "description": "Inspect one exact node discovered from pod evidence: conditions/pressure, capacity, allocatable, taints and runtime/kubelet information.",
+                            "arguments": {"operation": "node_diagnostics", "node_name": "required exact node name discovered from evidence"},
+                        },
+                        {
+                            "name": "resource_usage",
+                            "description": "Read current Metrics API usage for an exact pod or node when metrics.k8s.io is available.",
+                            "arguments": {"operation": "resource_usage", "namespace": "required with pod_name", "pod_name": "optional exact pod name", "node_name": "optional exact node name; provide pod_name or node_name"},
+                        },
+                        {
+                            "name": "namespace_constraints",
+                            "description": "Inspect ResourceQuota and LimitRange constraints for one configured namespace.",
+                            "arguments": {"operation": "namespace_constraints", "namespace": "required configured namespace"},
+                        },
+                        {
+                            "name": "storage_diagnostics",
+                            "description": "Inspect one exact PVC plus bound PV and StorageClass metadata without reading Secret data.",
+                            "arguments": {"operation": "storage_diagnostics", "namespace": "required configured namespace", "pvc_name": "required exact PVC name discovered from pod volume evidence"},
+                        },
+                        {
+                            "name": "networking_diagnostics",
+                            "description": "Inspect bounded Ingress and NetworkPolicy configuration for one configured namespace. TLS Secret values are never read.",
+                            "arguments": {"operation": "networking_diagnostics", "namespace": "required configured namespace"},
+                        },
+                        {
+                            "name": "autoscaling_diagnostics",
+                            "description": "Inspect HPA and PodDisruptionBudget state in one configured namespace, optionally filtered by workload.",
+                            "arguments": {"operation": "autoscaling_diagnostics", "namespace": "required configured namespace", "workload_name": "optional exact workload name"},
+                        },
+                        {
+                            "name": "resource_events",
+                            "description": "Read bounded Kubernetes Events for one exact resource name inside a configured namespace.",
+                            "arguments": {"operation": "resource_events", "namespace": "required configured namespace", "resource_name": "required exact resource name"},
+                        },
+                        {
                             "name": "service_diagnostics",
-                            "description": "Inspect one Kubernetes Service and its selected pods/endpoints/logs/events.",
+                            "description": "Inspect one Kubernetes Service, Endpoints, EndpointSlices and its selected pods/logs/events.",
                             "arguments": {"operation": "service_diagnostics", "namespace": "required configured namespace", "service_name": "required exact service name"},
                         },
                     ],
@@ -444,6 +504,30 @@ class RCAOrchestrator:
         if namespace not in allowed:
             raise ValueError(f"Namespace {namespace} is outside the configured Application scope")
         return namespace
+
+    @staticmethod
+    def _validate_agentic_node(tool: dict, provider, node_name: str | None) -> str:
+        """Allow node reads only for nodes currently hosting pods in configured Application namespaces."""
+        requested = str(node_name or "").strip()
+        if not requested:
+            raise ValueError("A node_name is required")
+        allowed_nodes: set[str] = set()
+        namespaces = RCAOrchestrator._configured_namespaces(tool)
+        if not namespaces:
+            raise ValueError("Kubernetes tool has no configured namespace scope")
+        ToolPolicy.assert_allowed("kubernetes", "list_pods")
+        for namespace in namespaces:
+            pods = provider.list_pods_for_selector(namespace=namespace, selector={})
+            allowed_nodes.update(
+                str(item.get("node_name"))
+                for item in pods
+                if item.get("node_name")
+            )
+        if requested not in allowed_nodes:
+            raise ValueError(
+                f"Node {requested} is outside the current Application namespace pod placement scope"
+            )
+        return requested
 
     def _execute_agentic_choice(
         self,
@@ -593,6 +677,17 @@ class RCAOrchestrator:
                 "kubernetes": snapshot,
             }]
 
+        if operation == "namespace_inventory":
+            ToolPolicy.assert_allowed("kubernetes", "get_namespace_inventory")
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            snapshot = provider.get_namespace_deep_inventory(namespace=namespace)
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespace": namespace},
+                "scope_candidate": {},
+                "kubernetes": {"scope": operation, **snapshot},
+            }]
+
         if operation == "pod_diagnostics":
             namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
             pod_name = str((arguments or {}).get("pod_name") or "").strip()
@@ -609,6 +704,206 @@ class RCAOrchestrator:
                 "agentic_arguments": {"operation": operation, "namespace": namespace, "pod_name": pod_name},
                 "scope_candidate": {},
                 "kubernetes": snapshot,
+            }]
+
+        if operation == "pod_resources":
+            ToolPolicy.assert_allowed("kubernetes", "get_pod_resources")
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            pod_name = str((arguments or {}).get("pod_name") or "").strip()
+            if not pod_name:
+                raise ValueError("pod_resources requires pod_name")
+            snapshot = provider.get_pod_resources(namespace=namespace, pod_name=pod_name)
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespace": namespace, "pod_name": pod_name},
+                "scope_candidate": {},
+                "kubernetes": {"scope": operation, **snapshot},
+            }]
+
+        if operation == "pod_logs":
+            ToolPolicy.assert_allowed("kubernetes", "get_logs")
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            pod_name = str((arguments or {}).get("pod_name") or "").strip()
+            container_name = str((arguments or {}).get("container_name") or "").strip()
+            if not pod_name or not container_name:
+                raise ValueError("pod_logs requires pod_name and container_name")
+            requested_tail = int((arguments or {}).get("tail_lines") or tail_lines)
+            bounded_tail = min(max(requested_tail, 1), 500)
+            previous = bool((arguments or {}).get("previous", False))
+            logs = provider.get_pod_logs(
+                namespace=namespace,
+                pod_name=pod_name,
+                container=container_name,
+                tail_lines=bounded_tail,
+                previous=previous,
+            )
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {
+                    "operation": operation,
+                    "namespace": namespace,
+                    "pod_name": pod_name,
+                    "container_name": container_name,
+                    "tail_lines": bounded_tail,
+                    "previous": previous,
+                },
+                "scope_candidate": {},
+                "kubernetes": {
+                    "scope": operation,
+                    "namespace": namespace,
+                    "pod_name": pod_name,
+                    "container_name": container_name,
+                    "previous": previous,
+                    "logs": logs,
+                },
+            }]
+
+        if operation == "owner_chain":
+            ToolPolicy.assert_allowed("kubernetes", "get_owner_chain")
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            pod_name = str((arguments or {}).get("pod_name") or "").strip()
+            if not pod_name:
+                raise ValueError("owner_chain requires pod_name")
+            chain = provider.get_owner_chain(namespace=namespace, pod_name=pod_name)
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespace": namespace, "pod_name": pod_name},
+                "scope_candidate": {},
+                "kubernetes": {"scope": operation, "namespace": namespace, "pod_name": pod_name, "owners": chain},
+            }]
+
+        if operation == "workload_diagnostics":
+            ToolPolicy.assert_allowed("kubernetes", "get_workload")
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            workload_kind = str((arguments or {}).get("workload_kind") or "").strip()
+            workload_name = str((arguments or {}).get("workload_name") or "").strip()
+            if not workload_kind or not workload_name:
+                raise ValueError("workload_diagnostics requires workload_kind and workload_name")
+            snapshot = provider.get_workload_diagnostics(
+                namespace=namespace,
+                workload_kind=workload_kind,
+                workload_name=workload_name,
+            )
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {
+                    "operation": operation,
+                    "namespace": namespace,
+                    "workload_kind": workload_kind,
+                    "workload_name": workload_name,
+                },
+                "scope_candidate": {},
+                "kubernetes": {"scope": operation, **snapshot},
+            }]
+
+        if operation == "node_diagnostics":
+            ToolPolicy.assert_allowed("kubernetes", "get_node")
+            node_name = self._validate_agentic_node(
+                tool,
+                provider,
+                (arguments or {}).get("node_name"),
+            )
+            snapshot = provider.get_node_diagnostics(node_name=node_name)
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "node_name": node_name},
+                "scope_candidate": {},
+                "kubernetes": {"scope": operation, **snapshot},
+            }]
+
+        if operation == "resource_usage":
+            ToolPolicy.assert_allowed("kubernetes", "get_resource_usage")
+            pod_name = str((arguments or {}).get("pod_name") or "").strip()
+            node_name = str((arguments or {}).get("node_name") or "").strip()
+            if pod_name:
+                namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+                usage = provider.get_pod_resource_usage(namespace=namespace, pod_name=pod_name)
+                target = {"namespace": namespace, "pod_name": pod_name}
+            elif node_name:
+                node_name = self._validate_agentic_node(tool, provider, node_name)
+                usage = provider.get_node_resource_usage(node_name=node_name)
+                target = {"node_name": node_name}
+            else:
+                raise ValueError("resource_usage requires pod_name or node_name")
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, **target},
+                "scope_candidate": {},
+                "kubernetes": {"scope": operation, "target": target, "usage": usage},
+            }]
+
+        if operation == "namespace_constraints":
+            ToolPolicy.assert_allowed("kubernetes", "get_namespace_constraints")
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            snapshot = provider.get_namespace_constraints(namespace=namespace)
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespace": namespace},
+                "scope_candidate": {},
+                "kubernetes": {"scope": operation, **snapshot},
+            }]
+
+        if operation == "storage_diagnostics":
+            ToolPolicy.assert_allowed("kubernetes", "get_storage")
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            pvc_name = str((arguments or {}).get("pvc_name") or "").strip()
+            if not pvc_name:
+                raise ValueError("storage_diagnostics requires pvc_name")
+            snapshot = provider.get_storage_diagnostics(namespace=namespace, pvc_name=pvc_name)
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespace": namespace, "pvc_name": pvc_name},
+                "scope_candidate": {},
+                "kubernetes": {"scope": operation, **snapshot},
+            }]
+
+        if operation == "networking_diagnostics":
+            ToolPolicy.assert_allowed("kubernetes", "get_networking")
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            snapshot = provider.get_networking_diagnostics(namespace=namespace)
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespace": namespace},
+                "scope_candidate": {},
+                "kubernetes": {"scope": operation, **snapshot},
+            }]
+
+        if operation == "autoscaling_diagnostics":
+            ToolPolicy.assert_allowed("kubernetes", "get_autoscaling")
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            workload_name = str((arguments or {}).get("workload_name") or "").strip() or None
+            snapshot = provider.get_autoscaling_diagnostics(
+                namespace=namespace,
+                workload_name=workload_name,
+            )
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {
+                    "operation": operation,
+                    "namespace": namespace,
+                    "workload_name": workload_name,
+                },
+                "scope_candidate": {},
+                "kubernetes": {"scope": operation, **snapshot},
+            }]
+
+        if operation == "resource_events":
+            ToolPolicy.assert_allowed("kubernetes", "get_events")
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            resource_name = str((arguments or {}).get("resource_name") or "").strip()
+            if not resource_name:
+                raise ValueError("resource_events requires resource_name")
+            events = provider.get_events_for_resource(namespace=namespace, resource_name=resource_name)
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespace": namespace, "resource_name": resource_name},
+                "scope_candidate": {},
+                "kubernetes": {
+                    "scope": operation,
+                    "namespace": namespace,
+                    "resource_name": resource_name,
+                    "events": events[-50:],
+                },
             }]
 
         if operation == "service_diagnostics":
@@ -654,16 +949,7 @@ class RCAOrchestrator:
             decisions.append({"round": round_number, **decision.model_dump(exclude_none=True)})
 
             if decision.stop:
-                if evidence:
-                    break
-                log_event(
-                    logger,
-                    logging.WARNING,
-                    "rca.agentic.empty_stop",
-                    "LLM requested stop before any evidence; continuing",
-                    investigation_id=investigation.id,
-                    round=round_number,
-                )
+                break
 
             executed_this_round = 0
             for choice in decision.choices:
@@ -720,35 +1006,11 @@ class RCAOrchestrator:
                 executed_signatures.append(signature)
                 executed_this_round += 1
 
-            if executed_this_round == 0:
-                if evidence:
-                    break
-                # Safe deterministic bootstrap if a model returns no usable choice.
-                first = catalog[0]
-                tool, dependency = bindings[first["tool_key"]]
-                arguments = {"operation": "namespace_health"} if tool.get("tool_type") == "kubernetes" else {}
-                observations = self._execute_agentic_choice(
-                    db,
-                    tool=tool,
-                    dependency=dependency,
-                    arguments=arguments,
-                    query=investigation.query,
-                    context=context,
-                )
-                evidence.extend(observations)
+            if executed_this_round == 0 and not decision.choices:
                 transcript_parts.append(
-                    self._tool_exchange_text(
-                        round_number=round_number,
-                        tool_key=first["tool_key"],
-                        reason="RCA Agent safe bootstrap because the planner returned no executable tool choice.",
-                        arguments=arguments,
-                        observations=observations,
-                    )
+                    f"ROUND {round_number} PLANNER RESPONSE\n"
+                    "No executable tool choice was requested. RCA Agent did not choose a tool on the LLM's behalf."
                 )
-                executed_signatures.append(self._choice_signature(first["tool_key"], arguments))
-
-        if not evidence:
-            raise ValueError("Agentic planner produced no executable evidence collection")
 
         rca = self._analyze(investigation.query, evidence, context, llm)
         return evidence, decisions, rca
@@ -859,6 +1121,9 @@ class RCAOrchestrator:
                     rca = self._analyze(investigation.query, evidence, context, llm)
 
                 self._persist_llm_usage(db, investigation, llm)
+                # Persist only redacted untrusted evidence. Raw provider payloads may
+                # contain accidental credentials in logs, events or error messages.
+                evidence = EvidenceReducer.redact_untrusted(evidence)
                 InvestigationRepository.mark_completed(
                     db=db,
                     investigation=investigation,
@@ -901,5 +1166,5 @@ class RCAOrchestrator:
                     investigation,
                     str(exc),
                     scope=resolved_scope_payload,
-                    evidence=evidence if evidence else None,
+                    evidence=EvidenceReducer.redact_untrusted(evidence) if evidence else None,
                 )

@@ -73,6 +73,13 @@ class KubernetesProviderFactory:
         provider.connection_mode = mode
         provider.core_v1 = client.CoreV1Api(api_client)
         provider.apps_v1 = client.AppsV1Api(api_client)
+        provider.batch_v1 = client.BatchV1Api(api_client)
+        provider.autoscaling_v2 = client.AutoscalingV2Api(api_client)
+        provider.policy_v1 = client.PolicyV1Api(api_client)
+        provider.networking_v1 = client.NetworkingV1Api(api_client)
+        provider.storage_v1 = client.StorageV1Api(api_client)
+        provider.discovery_v1 = client.DiscoveryV1Api(api_client)
+        provider.custom_objects = client.CustomObjectsApi(api_client)
         provider.version_api = client.VersionApi(api_client)
         provider.api_client = api_client
         return provider

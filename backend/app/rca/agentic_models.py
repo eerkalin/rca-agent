@@ -26,6 +26,40 @@ class AgenticToolArguments(BaseModel):
         default=None,
         description="Exact service name when supported by the selected operation",
     )
+    container_name: str | None = Field(
+        default=None,
+        description="Exact container name when a pod operation supports selecting one container",
+    )
+    workload_name: str | None = Field(
+        default=None,
+        description="Exact Kubernetes workload name discovered from evidence",
+    )
+    workload_kind: str | None = Field(
+        default=None,
+        description="Deployment, StatefulSet, DaemonSet, ReplicaSet, Job or CronJob",
+    )
+    node_name: str | None = Field(
+        default=None,
+        description="Exact Kubernetes node name discovered from pod/workload evidence",
+    )
+    pvc_name: str | None = Field(
+        default=None,
+        description="Exact PersistentVolumeClaim name discovered from pod volume evidence",
+    )
+    resource_name: str | None = Field(
+        default=None,
+        description="Exact Kubernetes resource name for bounded event inspection",
+    )
+    tail_lines: int | None = Field(
+        default=None,
+        ge=1,
+        le=500,
+        description="Maximum log lines to return from one container",
+    )
+    previous: bool | None = Field(
+        default=None,
+        description="Read previous terminated container logs when true",
+    )
     promql: str | None = Field(
         default=None,
         description="Read-only PromQL query for the Prometheus promql operation",

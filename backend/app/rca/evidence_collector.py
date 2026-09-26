@@ -25,6 +25,14 @@ class EvidenceCollector:
         pods = kubernetes.list_pods_for_selector(namespace=namespace, selector=selector)
         ToolPolicy.assert_allowed("kubernetes", "get_endpoints")
         endpoints = kubernetes.get_service_endpoints(namespace=namespace, service_name=service_name)
+        try:
+            ToolPolicy.assert_allowed("kubernetes", "get_endpointslices")
+            endpoint_slices = kubernetes.get_endpoint_slices(namespace=namespace, service_name=service_name)
+        except Exception as exc:
+            endpoint_slices = []
+            endpoint_slices_error = str(exc)
+        else:
+            endpoint_slices_error = None
 
         pod_evidence = []
         for pod in pods:
@@ -57,6 +65,8 @@ class EvidenceCollector:
             "found": True,
             "service": service,
             "endpoints": endpoints,
+            "endpoint_slices": endpoint_slices,
+            "endpoint_slices_error": endpoint_slices_error,
             "pods": pod_evidence,
         }
 
@@ -78,6 +88,18 @@ class EvidenceCollector:
                 "pod_name": pod_name,
                 "found": False,
             }
+
+        try:
+            ToolPolicy.assert_allowed("kubernetes", "get_pod_diagnostics")
+            deep_pod = kubernetes.get_pod_deep_diagnostics(
+                namespace=namespace,
+                pod_name=pod_name,
+            )
+        except Exception as exc:
+            deep_pod = None
+            deep_pod_error = str(exc)
+        else:
+            deep_pod_error = None
 
         logs = {}
         for container in pod.get("containers", []):
@@ -130,7 +152,8 @@ class EvidenceCollector:
             "namespace": namespace,
             "pod_name": pod_name,
             "found": True,
-            "pod": pod,
+            "pod": deep_pod or pod,
+            "deep_pod_error": deep_pod_error,
             "events": events,
             "events_error": events_error,
             "logs": logs,
