@@ -230,10 +230,23 @@ function renderLLMHistoryItems(payload) {
   if (!payload.items?.length) return '<div class="hint">No LLM exchanges have been recorded yet.</div>';
   return `<div class="llm-history-list">${payload.items.map(item => {
     const tokenText = item.token_usage_available ? `${Number(item.total_tokens || 0).toLocaleString()} tokens` : 'tokens unavailable';
-    return `<article class="llm-history-item"><div class="card-title-row"><div><strong>#${item.sequence} · ${esc(friendlyValue(item.phase || 'LLM'))}</strong><div class="hint">${esc(item.provider_type || 'LLM')}${item.model ? ` · ${esc(item.model)}` : ''} · ${esc(tokenText)} · ${esc(formatDuration(item.duration_ms))}</div></div>${item.error ? '<span class="badge error-badge">Error</span>' : '<span class="badge ok">Completed</span>'}</div><details><summary>Request</summary><pre>${esc(JSON.stringify(item.request || {}, null, 2))}</pre></details><details><summary>Response</summary><pre>${esc(JSON.stringify(item.response || {}, null, 2))}</pre></details>${item.error ? `<div class="investigation-error"><strong>LLM call failed</strong><p>${esc(item.error)}</p></div>` : ''}</article>`;
+    return `<article class="llm-history-item">
+      <div class="card-title-row">
+        <div><strong>#${item.sequence} · ${esc(friendlyValue(item.phase || 'LLM'))}</strong><div class="hint">${esc(item.provider_type || 'LLM')}${item.model ? ` · ${esc(item.model)}` : ''} · ${esc(tokenText)} · ${esc(formatDuration(item.duration_ms))}</div></div>
+        ${item.error ? '<span class="badge error-badge">Error</span>' : '<span class="badge ok">Completed</span>'}
+      </div>
+      <details>
+        <summary><span>Request</span><button type="button" class="copy-history-button" onclick="event.preventDefault();event.stopPropagation();copyLLMHistoryPart(${Number(item.sequence)}, 'request', this)">Copy request</button></summary>
+        <pre>${esc(JSON.stringify(item.request || {}, null, 2))}</pre>
+      </details>
+      <details>
+        <summary><span>Response</span><button type="button" class="copy-history-button" onclick="event.preventDefault();event.stopPropagation();copyLLMHistoryPart(${Number(item.sequence)}, 'response', this)">Copy response</button></summary>
+        <pre>${esc(JSON.stringify(item.response || {}, null, 2))}</pre>
+      </details>
+      ${item.error ? `<div class="investigation-error"><strong>LLM call failed</strong><p>${esc(item.error)}</p></div>` : ''}
+    </article>`;
   }).join('')}</div>`;
 }
-
 async function loadLLMHistory(investigationId) {
   const root = qs('#llm-history-content');
   if (!root) return;
