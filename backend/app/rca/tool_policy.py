@@ -20,6 +20,9 @@ class ToolPolicy:
                 "get_logs",
                 "get_endpoints",
                 "get_inventory",
+                "get_pod_status",
+                "list_workloads",
+                "get_workload_configuration",
             }
         ),
         "elasticsearch": frozenset({"search_logs", "get_document", "field_caps"}),
