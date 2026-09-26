@@ -642,6 +642,142 @@ class RCAOrchestrator:
                 "kubernetes": snapshot,
             }]
 
+        if operation == "list_pods":
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            ToolPolicy.assert_allowed("kubernetes", "list_pods")
+            limit = min(max(int((arguments or {}).get("limit") or 50), 1), 100)
+            pods = provider.list_pods_for_selector(namespace=namespace, selector={})[:limit]
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespace": namespace, "limit": limit},
+                "scope_candidate": {},
+                "kubernetes": {
+                    "scope": "pod_list",
+                    "namespace": namespace,
+                    "count": len(pods),
+                    "pods": pods,
+                },
+            }]
+
+        if operation == "pod_status":
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            pod_name = str((arguments or {}).get("pod_name") or "").strip()
+            if not pod_name:
+                raise ValueError("pod_status requires pod_name")
+            ToolPolicy.assert_allowed("kubernetes", "get_pod_status")
+            snapshot = provider.get_pod_status(namespace=namespace, pod_name=pod_name)
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespace": namespace, "pod_name": pod_name},
+                "scope_candidate": {},
+                "kubernetes": snapshot,
+            }]
+
+        if operation == "pod_logs":
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            pod_name = str((arguments or {}).get("pod_name") or "").strip()
+            if not pod_name:
+                raise ValueError("pod_logs requires pod_name")
+            ToolPolicy.assert_allowed("kubernetes", "get_logs")
+            configured_tail = min(max(int((tool.get("config") or {}).get("tail_lines", 50)), 1), 500)
+            requested_tail = int((arguments or {}).get("tail_lines") or configured_tail)
+            bounded_tail = min(max(requested_tail, 1), configured_tail, 500)
+            container_name = str((arguments or {}).get("container_name") or "").strip() or None
+            previous = bool((arguments or {}).get("previous", False))
+            logs = provider.get_pod_logs(
+                namespace=namespace,
+                pod_name=pod_name,
+                container=container_name,
+                tail_lines=bounded_tail,
+                previous=previous,
+            )
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {
+                    "operation": operation,
+                    "namespace": namespace,
+                    "pod_name": pod_name,
+                    "container_name": container_name,
+                    "tail_lines": bounded_tail,
+                    "previous": previous,
+                },
+                "scope_candidate": {},
+                "kubernetes": {
+                    "scope": "pod_logs",
+                    "namespace": namespace,
+                    "pod_name": pod_name,
+                    "container_name": container_name,
+                    "previous": previous,
+                    "logs": logs,
+                },
+            }]
+
+        if operation == "resource_events":
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            resource_name = str((arguments or {}).get("resource_name") or "").strip()
+            if not resource_name:
+                raise ValueError("resource_events requires resource_name")
+            ToolPolicy.assert_allowed("kubernetes", "get_events")
+            events = provider.get_events_for_resource(namespace=namespace, resource_name=resource_name)
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {
+                    "operation": operation,
+                    "namespace": namespace,
+                    "resource_kind": (arguments or {}).get("resource_kind"),
+                    "resource_name": resource_name,
+                },
+                "scope_candidate": {},
+                "kubernetes": {
+                    "scope": "resource_events",
+                    "namespace": namespace,
+                    "resource_kind": (arguments or {}).get("resource_kind"),
+                    "resource_name": resource_name,
+                    "events": events[-20:],
+                },
+            }]
+
+        if operation == "workload_inventory":
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            limit = min(max(int((arguments or {}).get("limit") or 50), 1), 100)
+            ToolPolicy.assert_allowed("kubernetes", "list_workloads")
+            workloads = provider.list_workloads(namespace=namespace, limit=limit)
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespace": namespace, "limit": limit},
+                "scope_candidate": {},
+                "kubernetes": {
+                    "scope": "workload_inventory",
+                    "namespace": namespace,
+                    "count": len(workloads),
+                    "workloads": workloads,
+                },
+            }]
+
+        if operation == "workload_configuration":
+            namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
+            resource_kind = str((arguments or {}).get("resource_kind") or "").strip()
+            resource_name = str((arguments or {}).get("resource_name") or "").strip()
+            if not resource_kind or not resource_name:
+                raise ValueError("workload_configuration requires resource_kind and resource_name")
+            ToolPolicy.assert_allowed("kubernetes", "get_workload_configuration")
+            snapshot = provider.get_workload_configuration(
+                namespace=namespace,
+                kind=resource_kind,
+                name=resource_name,
+            )
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {
+                    "operation": operation,
+                    "namespace": namespace,
+                    "resource_kind": resource_kind,
+                    "resource_name": resource_name,
+                },
+                "scope_candidate": {},
+                "kubernetes": snapshot,
+            }]
+
         if operation == "pod_diagnostics":
             namespace = self._validate_agentic_namespace(tool, (arguments or {}).get("namespace"))
             pod_name = str((arguments or {}).get("pod_name") or "").strip()
