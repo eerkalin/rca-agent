@@ -500,6 +500,29 @@ class RCAOrchestrator:
             raise ValueError(f"Namespace {namespace} is outside the configured Application scope")
         return namespace
 
+    @staticmethod
+    def _validate_agentic_node(tool: dict, provider, node_name: str | None) -> str:
+        """Allow node reads only for nodes currently hosting pods in configured Application namespaces."""
+        requested = str(node_name or "").strip()
+        if not requested:
+            raise ValueError("A node_name is required")
+        allowed_nodes: set[str] = set()
+        namespaces = RCAOrchestrator._configured_namespaces(tool)
+        if not namespaces:
+            raise ValueError("Kubernetes tool has no configured namespace scope")
+        for namespace in namespaces:
+            pods = provider.list_pods_for_selector(namespace=namespace, selector={})
+            allowed_nodes.update(
+                str(item.get("node_name"))
+                for item in pods
+                if item.get("node_name")
+            )
+        if requested not in allowed_nodes:
+            raise ValueError(
+                f"Node {requested} is outside the current Application namespace pod placement scope"
+            )
+        return requested
+
     def _execute_agentic_choice(
         self,
         db: Session,
@@ -758,9 +781,11 @@ class RCAOrchestrator:
 
         if operation == "node_diagnostics":
             ToolPolicy.assert_allowed("kubernetes", "get_node")
-            node_name = str((arguments or {}).get("node_name") or "").strip()
-            if not node_name:
-                raise ValueError("node_diagnostics requires node_name")
+            node_name = self._validate_agentic_node(
+                tool,
+                provider,
+                (arguments or {}).get("node_name"),
+            )
             snapshot = provider.get_node_diagnostics(node_name=node_name)
             return [{
                 "tool": descriptor,
@@ -778,6 +803,7 @@ class RCAOrchestrator:
                 usage = provider.get_pod_resource_usage(namespace=namespace, pod_name=pod_name)
                 target = {"namespace": namespace, "pod_name": pod_name}
             elif node_name:
+                node_name = self._validate_agentic_node(tool, provider, node_name)
                 usage = provider.get_node_resource_usage(node_name=node_name)
                 target = {"node_name": node_name}
             else:
