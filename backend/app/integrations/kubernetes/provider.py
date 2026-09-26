@@ -17,6 +17,8 @@ class KubernetesProvider:
         self.discovery_v1 = client.DiscoveryV1Api()
         self.custom_objects = client.CustomObjectsApi()
         self.version_api = client.VersionApi()
+        self.apis_api = client.ApisApi()
+        self.core_api = client.CoreApi()
         self.api_client = client.ApiClient()
 
     @staticmethod
@@ -29,15 +31,78 @@ class KubernetesProvider:
             config.load_kube_config()
             return "kubeconfig"
 
-    def test_connection(self) -> dict:
+    @staticmethod
+    def _distribution_from_version(git_version: str | None) -> str:
+        value = str(git_version or "").lower()
+        if "k3s" in value:
+            return "k3s"
+        if "eks" in value:
+            return "eks"
+        if "gke" in value:
+            return "gke"
+        return "kubernetes"
+
+    def discover_capabilities(self) -> dict:
+        """Discover server API groups without requiring the user to choose a Kubernetes version.
+
+        Stable RCA operation names are mapped to capabilities at runtime. Missing
+        optional API groups disable only the operations that require them.
+        """
         version = self.version_api.get_code()
+        git_version = getattr(version, "git_version", None)
+
+        group_versions: set[str] = set()
+        discovery_error = None
+        try:
+            groups = self.apis_api.get_api_versions()
+            for group in getattr(groups, "groups", None) or []:
+                for item in getattr(group, "versions", None) or []:
+                    group_version = getattr(item, "group_version", None)
+                    if group_version:
+                        group_versions.add(str(group_version))
+        except Exception as exc:
+            discovery_error = str(exc)
+
+        try:
+            core_versions = self.core_api.get_api_versions()
+            core_v1 = "v1" in set(getattr(core_versions, "versions", None) or [])
+        except Exception as exc:
+            core_v1 = True
+            if discovery_error is None:
+                discovery_error = str(exc)
+
+        capabilities = {
+            "core_v1": core_v1,
+            "apps_v1": ("apps/v1" in group_versions) if group_versions else None,
+            "batch_v1": ("batch/v1" in group_versions) if group_versions else None,
+            "autoscaling_v2": ("autoscaling/v2" in group_versions) if group_versions else None,
+            "policy_v1": ("policy/v1" in group_versions) if group_versions else None,
+            "networking_v1": ("networking.k8s.io/v1" in group_versions) if group_versions else None,
+            "storage_v1": ("storage.k8s.io/v1" in group_versions) if group_versions else None,
+            "discovery_v1": ("discovery.k8s.io/v1" in group_versions) if group_versions else None,
+            "metrics_v1beta1": ("metrics.k8s.io/v1beta1" in group_versions) if group_versions else None,
+        }
+        return {
+            "server_version": git_version,
+            "distribution": self._distribution_from_version(git_version),
+            "api_discovery_available": bool(group_versions),
+            "discovery_error": discovery_error,
+            "capabilities": capabilities,
+        }
+
+    def test_connection(self) -> dict:
         namespaces = self.core_v1.list_namespace()
+        discovered = self.discover_capabilities()
 
         return {
             "connected": True,
             "connection_mode": self.connection_mode,
-            "kubernetes_version": version.git_version,
+            "kubernetes_version": discovered.get("server_version"),
+            "distribution": discovered.get("distribution"),
             "namespaces_count": len(namespaces.items),
+            "api_discovery_available": discovered.get("api_discovery_available"),
+            "capabilities": discovered.get("capabilities"),
+            "discovery_error": discovered.get("discovery_error"),
         }
 
     def list_namespaces(self) -> list[dict]:
@@ -401,6 +466,15 @@ class KubernetesProvider:
             )
 
         return pods
+
+    def list_namespace_pod_statuses(self, namespace: str) -> dict:
+        """Return pod/container state without classifying health in RCA Agent."""
+        pods = self.list_pods_for_selector(namespace=namespace, selector={})
+        return {
+            "namespace": namespace,
+            "total_pods": len(pods),
+            "pods": pods,
+        }
 
     def get_events_for_resource(
         self,
