@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.rca.agentic_models import AgenticDecision, parse_agentic_decision_text
@@ -171,3 +172,44 @@ def test_kubernetes_policy_allows_deep_reads_but_denies_mutation():
     import pytest
     with pytest.raises(PermissionError):
         ToolPolicy.assert_allowed("kubernetes", "delete_pod")
+
+
+def test_agentic_orchestrator_never_bootstraps_a_tool_for_the_llm():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "rca"
+        / "orchestrator.py"
+    ).read_text()
+
+    assert "Safe deterministic bootstrap" not in source
+    assert "safe bootstrap because the planner returned no executable tool choice" not in source
+    assert "RCA Agent did not choose a tool on the LLM's behalf" in source
+
+
+def test_helm_kubernetes_reader_never_grants_secret_or_mutation_access():
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "helm"
+        / "rca-agent"
+        / "templates"
+        / "rbac.yaml"
+    ).read_text()
+
+    assert "- secrets" not in source
+    assert '"create"' not in source
+    assert '"update"' not in source
+    assert '"patch"' not in source
+    assert '"delete"' not in source
+
+
+def test_nested_persisted_evidence_is_redacted():
+    value = {
+        "event": "Authorization: Bearer very-secret",
+        "nested": [{"message": "client_secret=hidden-value"}],
+    }
+
+    redacted = EvidenceReducer.redact_untrusted(value)
+
+    assert "very-secret" not in redacted["event"]
+    assert "hidden-value" not in redacted["nested"][0]["message"]
