@@ -80,7 +80,7 @@ class EvidenceReducer:
     @classmethod
     def _bounded_value(cls, value, *, depth: int = 0):
         """Bound provider-produced diagnostic JSON before it is placed in the LLM transcript."""
-        if depth > 8:
+        if depth > 16:
             return "[nested diagnostic data truncated]"
         if isinstance(value, dict):
             result = {}
