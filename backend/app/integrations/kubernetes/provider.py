@@ -231,7 +231,23 @@ class KubernetesProvider:
                 "labels": item.metadata.labels or {},
                 "type": item.spec.type,
                 "cluster_ip": item.spec.cluster_ip,
+                "cluster_ips": list(item.spec.cluster_ips or []),
+                "external_name": item.spec.external_name,
                 "selector": item.spec.selector or {},
+                "ports": [
+                    {
+                        "name": port.name,
+                        "port": port.port,
+                        "target_port": port.target_port,
+                        "node_port": port.node_port,
+                        "protocol": port.protocol,
+                    }
+                    for port in (item.spec.ports or [])
+                ],
+                "session_affinity": item.spec.session_affinity,
+                "external_traffic_policy": item.spec.external_traffic_policy,
+                "internal_traffic_policy": item.spec.internal_traffic_policy,
+                "ip_families": list(item.spec.ip_families or []),
             }
             for item in result.items
         ]
@@ -858,8 +874,23 @@ class KubernetesProvider:
             "termination_grace_period_seconds": spec.termination_grace_period_seconds,
             "service_account_name": spec.service_account_name,
             "priority_class_name": spec.priority_class_name,
+            "priority": spec.priority,
+            "preemption_policy": spec.preemption_policy,
             "scheduler_name": spec.scheduler_name,
+            "runtime_class_name": spec.runtime_class_name,
             "dns_policy": spec.dns_policy,
+            "dns_config": self.api_client.sanitize_for_serialization(spec.dns_config),
+            "enable_service_links": spec.enable_service_links,
+            "hostname": spec.hostname,
+            "subdomain": spec.subdomain,
+            "affinity": self.api_client.sanitize_for_serialization(spec.affinity),
+            "topology_spread_constraints": self.api_client.sanitize_for_serialization(
+                spec.topology_spread_constraints or []
+            ),
+            "readiness_gates": self.api_client.sanitize_for_serialization(
+                spec.readiness_gates or []
+            ),
+            "overhead": dict(spec.overhead or {}),
             "host_network": bool(spec.host_network),
             "host_pid": bool(spec.host_pid),
             "host_ipc": bool(spec.host_ipc),
@@ -928,6 +959,10 @@ class KubernetesProvider:
 
         spec = obj.spec
         template = getattr(spec, "template", None)
+        if kind == "cronjob":
+            job_template = getattr(spec, "job_template", None)
+            job_spec = getattr(job_template, "spec", None)
+            template = getattr(job_spec, "template", None)
         template_spec = getattr(template, "spec", None)
         selector = getattr(spec, "selector", None)
         return {
@@ -951,6 +986,20 @@ class KubernetesProvider:
                 self._container_spec_summary(container)
                 for container in (getattr(template_spec, "init_containers", None) or [])
             ],
+            "pod_template_scheduling": {
+                "node_selector": getattr(template_spec, "node_selector", None) or {},
+                "affinity": self.api_client.sanitize_for_serialization(
+                    getattr(template_spec, "affinity", None)
+                ),
+                "tolerations": self.api_client.sanitize_for_serialization(
+                    getattr(template_spec, "tolerations", None) or []
+                ),
+                "topology_spread_constraints": self.api_client.sanitize_for_serialization(
+                    getattr(template_spec, "topology_spread_constraints", None) or []
+                ),
+                "priority_class_name": getattr(template_spec, "priority_class_name", None),
+                "runtime_class_name": getattr(template_spec, "runtime_class_name", None),
+            } if template_spec else None,
             "status": self.api_client.sanitize_for_serialization(obj.status),
         }
 
