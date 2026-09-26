@@ -252,8 +252,10 @@ async function loadLLMHistory(investigationId) {
   if (!root) return;
   try {
     const payload = await api(`/investigations/${investigationId}/llm-history`);
+    currentLLMHistoryPayload = payload;
     root.innerHTML = renderLLMHistoryItems(payload);
   } catch (error) {
+    currentLLMHistoryPayload = null;
     root.innerHTML = `<div class="investigation-error"><strong>Unable to load LLM history</strong><p>${esc(error.message)}</p></div>`;
   }
 }
@@ -271,6 +273,7 @@ async function openInvestigation(id) {
         <button class="back-button" id="close-investigation">← Investigations</button>
         <div class="actions compact-actions">
           <span class="badge ${investigationStatusClass(item.status)}">${esc(friendlyValue(item.status || 'unknown'))}</span>
+          <button id="download-investigation-pdf" type="button">Download PDF</button>
           ${pending ? '<button id="refresh-investigation-detail">Refresh</button>' : ''}
           ${item.status === 'failed' && canRunInvestigationActions() ? '<button id="retry-investigation" class="primary">Retry</button>' : ''}
         </div>
@@ -309,6 +312,8 @@ async function openInvestigation(id) {
     qs('#investigations-list')?.classList.remove('hidden');
     qs('#investigations-view .section-head')?.classList.remove('hidden');
   };
+  const downloadButton = qs('#download-investigation-pdf');
+  if (downloadButton) downloadButton.onclick = () => downloadInvestigationPdf(id);
   const refreshButton = qs('#refresh-investigation-detail');
   if (refreshButton) refreshButton.onclick = () => openInvestigation(id).catch(error => toast(error.message));
   const retryButton = qs('#retry-investigation');
