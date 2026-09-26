@@ -35,6 +35,93 @@ class EvidenceReducer:
     def _reduce_kubernetes(cls, item: dict) -> dict:
         kubernetes = item.get("kubernetes", {})
 
+        if kubernetes.get("scope") == "pod_list":
+            pods = []
+            for pod in kubernetes.get("pods", [])[:100]:
+                pods.append({
+                    "name": pod.get("name"),
+                    "phase": pod.get("phase"),
+                    "node_name": pod.get("node_name"),
+                    "conditions": pod.get("conditions", []),
+                    "containers": pod.get("containers", []),
+                    "health_reasons": pod.get("health_reasons", []),
+                    "desired_container_count": pod.get("desired_container_count"),
+                    "status_container_count": pod.get("status_container_count"),
+                    "ready_container_count": pod.get("ready_container_count"),
+                    "start_time": pod.get("start_time"),
+                    "deletion_timestamp": pod.get("deletion_timestamp"),
+                })
+            return {
+                "scope": "pod_list",
+                "namespace": kubernetes.get("namespace"),
+                "count": kubernetes.get("count", len(pods)),
+                "pods": pods,
+            }
+
+        if kubernetes.get("scope") == "pod_status":
+            pod = kubernetes.get("pod") or {}
+            return {
+                "scope": "pod_status",
+                "namespace": kubernetes.get("namespace"),
+                "pod_name": kubernetes.get("pod_name"),
+                "found": kubernetes.get("found"),
+                "pod": {
+                    "name": pod.get("name"),
+                    "phase": pod.get("phase"),
+                    "node_name": pod.get("node_name"),
+                    "conditions": pod.get("conditions", []),
+                    "containers": pod.get("containers", []),
+                    "health_reasons": pod.get("health_reasons", []),
+                    "desired_container_count": pod.get("desired_container_count"),
+                    "status_container_count": pod.get("status_container_count"),
+                    "ready_container_count": pod.get("ready_container_count"),
+                    "start_time": pod.get("start_time"),
+                    "deletion_timestamp": pod.get("deletion_timestamp"),
+                } if pod else None,
+            }
+
+        if kubernetes.get("scope") == "pod_logs":
+            return {
+                "scope": "pod_logs",
+                "namespace": kubernetes.get("namespace"),
+                "pod_name": kubernetes.get("pod_name"),
+                "container_name": kubernetes.get("container_name"),
+                "previous": bool(kubernetes.get("previous", False)),
+                "logs": cls._compact_log(kubernetes.get("logs")),
+            }
+
+        if kubernetes.get("scope") == "resource_events":
+            return {
+                "scope": "resource_events",
+                "namespace": kubernetes.get("namespace"),
+                "resource_kind": kubernetes.get("resource_kind"),
+                "resource_name": kubernetes.get("resource_name"),
+                "events": (kubernetes.get("events") or [])[-cls.MAX_EVENTS_PER_POD :],
+            }
+
+        if kubernetes.get("scope") == "workload_inventory":
+            return {
+                "scope": "workload_inventory",
+                "namespace": kubernetes.get("namespace"),
+                "count": kubernetes.get("count", 0),
+                "workloads": (kubernetes.get("workloads") or [])[:100],
+            }
+
+        if kubernetes.get("scope") == "workload_configuration":
+            return {
+                "scope": "workload_configuration",
+                "kind": kubernetes.get("kind"),
+                "namespace": kubernetes.get("namespace"),
+                "name": kubernetes.get("name"),
+                "generation": kubernetes.get("generation"),
+                "observed_generation": kubernetes.get("observed_generation"),
+                "selector": kubernetes.get("selector", {}),
+                "strategy": kubernetes.get("strategy", {}),
+                "status": kubernetes.get("status", {}),
+                "conditions": kubernetes.get("conditions", []),
+                "pod_template": kubernetes.get("pod_template", {}),
+            }
+
         if kubernetes.get("scope") == "pod_diagnostics":
             pod = kubernetes.get("pod") or {}
             logs = {}
