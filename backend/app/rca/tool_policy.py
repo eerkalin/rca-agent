@@ -20,6 +20,7 @@ class ToolPolicy:
                 "get_logs",
                 "get_endpoints",
                 "get_inventory",
+                "get_namespace_inventory",
                 "get_pod_diagnostics",
                 "get_pod_resources",
                 "get_workload",
