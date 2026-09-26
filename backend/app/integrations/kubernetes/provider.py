@@ -538,3 +538,269 @@ class KubernetesProvider:
                 )
 
         return endpoints
+
+    @staticmethod
+    def _probe_summary(probe) -> dict | None:
+        if probe is None:
+            return None
+        action = None
+        target = None
+        if probe.http_get:
+            action = "http_get"
+            target = {
+                "path": probe.http_get.path,
+                "port": str(probe.http_get.port),
+                "scheme": probe.http_get.scheme,
+            }
+        elif probe.tcp_socket:
+            action = "tcp_socket"
+            target = {"port": str(probe.tcp_socket.port)}
+        elif probe.grpc:
+            action = "grpc"
+            target = {"port": probe.grpc.port, "service": probe.grpc.service}
+        elif probe.exec:
+            # Exec command contents may contain internal paths/arguments. Expose
+            # only the fact that an exec probe exists.
+            action = "exec"
+            target = {"command": "[REDACTED]"}
+        return {
+            "type": action,
+            "target": target,
+            "initial_delay_seconds": probe.initial_delay_seconds,
+            "period_seconds": probe.period_seconds,
+            "timeout_seconds": probe.timeout_seconds,
+            "failure_threshold": probe.failure_threshold,
+            "success_threshold": probe.success_threshold,
+        }
+
+    @classmethod
+    def _safe_container_configuration(cls, container) -> dict:
+        return {
+            "name": container.name,
+            "image": container.image,
+            "image_pull_policy": container.image_pull_policy,
+            "ports": [
+                {
+                    "name": port.name,
+                    "container_port": port.container_port,
+                    "protocol": port.protocol,
+                }
+                for port in (container.ports or [])
+            ],
+            "resources": {
+                "requests": dict((container.resources.requests or {})) if container.resources else {},
+                "limits": dict((container.resources.limits or {})) if container.resources else {},
+            },
+            # Environment values, Secret refs, ConfigMap refs and volume source
+            # names are deliberately omitted from LLM-facing workload config.
+            "environment_variable_names": [
+                item.name for item in (container.env or [])
+            ],
+            "environment_sources": {
+                "count": len(container.env_from or []),
+                "details": "[REDACTED]",
+            },
+            "readiness_probe": cls._probe_summary(container.readiness_probe),
+            "liveness_probe": cls._probe_summary(container.liveness_probe),
+            "startup_probe": cls._probe_summary(container.startup_probe),
+        }
+
+    @classmethod
+    def _safe_pod_template_configuration(cls, template) -> dict:
+        spec = template.spec
+        return {
+            "containers": [
+                cls._safe_container_configuration(container)
+                for container in (spec.containers or [])
+            ],
+            "init_containers": [
+                cls._safe_container_configuration(container)
+                for container in (spec.init_containers or [])
+            ],
+            "restart_policy": spec.restart_policy,
+            "termination_grace_period_seconds": spec.termination_grace_period_seconds,
+            "dns_policy": spec.dns_policy,
+            "host_network": bool(spec.host_network),
+            "volume_count": len(spec.volumes or []),
+            "service_account": "[REDACTED]" if spec.service_account_name else None,
+        }
+
+    def list_workloads(
+        self,
+        namespace: str,
+        limit: int = 50,
+    ) -> list[dict]:
+        items = []
+        for deployment in self.apps_v1.list_namespaced_deployment(namespace=namespace).items:
+            items.append({
+                "kind": "Deployment",
+                "namespace": namespace,
+                "name": deployment.metadata.name,
+                "generation": deployment.metadata.generation,
+                "observed_generation": deployment.status.observed_generation,
+                "replicas": deployment.spec.replicas,
+                "ready_replicas": deployment.status.ready_replicas or 0,
+                "available_replicas": deployment.status.available_replicas or 0,
+                "updated_replicas": deployment.status.updated_replicas or 0,
+                "containers": [
+                    {"name": container.name, "image": container.image}
+                    for container in (deployment.spec.template.spec.containers or [])
+                ],
+            })
+        for statefulset in self.apps_v1.list_namespaced_stateful_set(namespace=namespace).items:
+            items.append({
+                "kind": "StatefulSet",
+                "namespace": namespace,
+                "name": statefulset.metadata.name,
+                "generation": statefulset.metadata.generation,
+                "observed_generation": statefulset.status.observed_generation,
+                "replicas": statefulset.spec.replicas,
+                "ready_replicas": statefulset.status.ready_replicas or 0,
+                "current_replicas": statefulset.status.current_replicas or 0,
+                "updated_replicas": statefulset.status.updated_replicas or 0,
+                "containers": [
+                    {"name": container.name, "image": container.image}
+                    for container in (statefulset.spec.template.spec.containers or [])
+                ],
+            })
+        for daemonset in self.apps_v1.list_namespaced_daemon_set(namespace=namespace).items:
+            items.append({
+                "kind": "DaemonSet",
+                "namespace": namespace,
+                "name": daemonset.metadata.name,
+                "generation": daemonset.metadata.generation,
+                "observed_generation": daemonset.status.observed_generation,
+                "desired_number_scheduled": daemonset.status.desired_number_scheduled,
+                "number_ready": daemonset.status.number_ready,
+                "updated_number_scheduled": daemonset.status.updated_number_scheduled,
+                "containers": [
+                    {"name": container.name, "image": container.image}
+                    for container in (daemonset.spec.template.spec.containers or [])
+                ],
+            })
+        items.sort(key=lambda item: (item["kind"], item["name"]))
+        return items[: max(1, min(int(limit or 50), 100))]
+
+    def get_workload_configuration(
+        self,
+        namespace: str,
+        kind: str,
+        name: str,
+    ) -> dict:
+        normalized_kind = (kind or "").strip().lower()
+        if normalized_kind == "deployment":
+            item = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
+            strategy = {
+                "type": item.spec.strategy.type if item.spec.strategy else None,
+                "max_surge": (
+                    str(item.spec.strategy.rolling_update.max_surge)
+                    if item.spec.strategy and item.spec.strategy.rolling_update
+                    and item.spec.strategy.rolling_update.max_surge is not None
+                    else None
+                ),
+                "max_unavailable": (
+                    str(item.spec.strategy.rolling_update.max_unavailable)
+                    if item.spec.strategy and item.spec.strategy.rolling_update
+                    and item.spec.strategy.rolling_update.max_unavailable is not None
+                    else None
+                ),
+            }
+            status = {
+                "replicas": item.status.replicas or 0,
+                "ready_replicas": item.status.ready_replicas or 0,
+                "available_replicas": item.status.available_replicas or 0,
+                "updated_replicas": item.status.updated_replicas or 0,
+                "unavailable_replicas": item.status.unavailable_replicas or 0,
+            }
+        elif normalized_kind == "statefulset":
+            item = self.apps_v1.read_namespaced_stateful_set(name=name, namespace=namespace)
+            strategy = {
+                "type": item.spec.update_strategy.type if item.spec.update_strategy else None,
+                "partition": (
+                    item.spec.update_strategy.rolling_update.partition
+                    if item.spec.update_strategy
+                    and item.spec.update_strategy.rolling_update
+                    else None
+                ),
+            }
+            status = {
+                "replicas": item.status.replicas or 0,
+                "ready_replicas": item.status.ready_replicas or 0,
+                "current_replicas": item.status.current_replicas or 0,
+                "updated_replicas": item.status.updated_replicas or 0,
+                "current_revision": item.status.current_revision,
+                "update_revision": item.status.update_revision,
+            }
+        elif normalized_kind == "daemonset":
+            item = self.apps_v1.read_namespaced_daemon_set(name=name, namespace=namespace)
+            strategy = {
+                "type": item.spec.update_strategy.type if item.spec.update_strategy else None,
+                "max_unavailable": (
+                    str(item.spec.update_strategy.rolling_update.max_unavailable)
+                    if item.spec.update_strategy
+                    and item.spec.update_strategy.rolling_update
+                    and item.spec.update_strategy.rolling_update.max_unavailable is not None
+                    else None
+                ),
+                "max_surge": (
+                    str(item.spec.update_strategy.rolling_update.max_surge)
+                    if item.spec.update_strategy
+                    and item.spec.update_strategy.rolling_update
+                    and item.spec.update_strategy.rolling_update.max_surge is not None
+                    else None
+                ),
+            }
+            status = {
+                "desired_number_scheduled": item.status.desired_number_scheduled,
+                "number_ready": item.status.number_ready,
+                "number_available": item.status.number_available,
+                "number_unavailable": item.status.number_unavailable,
+                "updated_number_scheduled": item.status.updated_number_scheduled,
+            }
+        else:
+            raise ValueError("workload kind must be Deployment, StatefulSet, or DaemonSet")
+
+        conditions = []
+        for condition in item.status.conditions or []:
+            conditions.append({
+                "type": condition.type,
+                "status": condition.status,
+                "reason": condition.reason,
+                "message": condition.message,
+            })
+
+        return {
+            "scope": "workload_configuration",
+            "kind": item.kind,
+            "namespace": namespace,
+            "name": item.metadata.name,
+            "generation": item.metadata.generation,
+            "observed_generation": item.status.observed_generation,
+            "selector": dict(item.spec.selector.match_labels or {}),
+            "strategy": strategy,
+            "status": status,
+            "conditions": conditions,
+            "pod_template": self._safe_pod_template_configuration(item.spec.template),
+        }
+
+    def get_pod_status(
+        self,
+        namespace: str,
+        pod_name: str,
+    ) -> dict:
+        pods = self.list_pods_for_selector(namespace=namespace, selector={})
+        pod = next((item for item in pods if item.get("name") == pod_name), None)
+        if pod is None:
+            return {
+                "scope": "pod_status",
+                "namespace": namespace,
+                "pod_name": pod_name,
+                "found": False,
+            }
+        return {
+            "scope": "pod_status",
+            "namespace": namespace,
+            "pod_name": pod_name,
+            "found": True,
+            "pod": pod,
+        }
