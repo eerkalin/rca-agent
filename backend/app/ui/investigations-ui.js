@@ -1,6 +1,7 @@
 // Investigations workspace: history, manual runs, RCA/evidence and optional LLM transcript.
 
 let investigations = [];
+let currentLLMHistoryPayload = null;
 
 function applicationName(id) {
   const app = applications.find(item => item.id === id);
@@ -39,6 +40,82 @@ function formatTokens(item) {
 
 function canRunInvestigationActions() {
   return !authState?.enabled || ['admin','investigator'].includes(authState?.role);
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const fallback = document.createElement('textarea');
+  fallback.value = text;
+  fallback.setAttribute('readonly', '');
+  fallback.style.position = 'fixed';
+  fallback.style.opacity = '0';
+  document.body.appendChild(fallback);
+  fallback.select();
+  const copied = document.execCommand('copy');
+  fallback.remove();
+  if (!copied) throw new Error('Clipboard copy is not available in this browser');
+}
+
+async function copyLLMHistoryPart(sequence, kind, button) {
+  const item = currentLLMHistoryPayload?.items?.find(entry => Number(entry.sequence) === Number(sequence));
+  if (!item) {
+    toast('LLM history item is no longer available');
+    return;
+  }
+  const value = kind === 'response' ? item.response : item.request;
+  const text = JSON.stringify(value || {}, null, 2);
+  const original = button?.textContent || 'Copy';
+  try {
+    await copyTextToClipboard(text);
+    if (button) button.textContent = 'Copied';
+    toast(kind === 'response' ? 'LLM response copied' : 'LLM request copied');
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    if (button) setTimeout(() => { button.textContent = original; }, 1200);
+  }
+}
+
+async function downloadInvestigationPdf(id) {
+  const button = qs('#download-investigation-pdf');
+  const original = button?.textContent || 'Download PDF';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Preparing PDF…';
+  }
+  try {
+    const response = await fetch(`${API}/investigations/${id}/export.pdf`, {
+      credentials: 'same-origin',
+      headers: {'Accept': 'application/pdf'},
+    });
+    if (!response.ok) {
+      let message = `${response.status} ${response.statusText}`;
+      try {
+        const payload = await response.json();
+        message = payload?.detail || message;
+      } catch (_) {}
+      throw new Error(message);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `rca-investigation-${id}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    toast(`PDF download failed: ${error.message}`);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
 }
 
 async function retryInvestigation(id) {
@@ -153,17 +230,32 @@ function renderLLMHistoryItems(payload) {
   if (!payload.items?.length) return '<div class="hint">No LLM exchanges have been recorded yet.</div>';
   return `<div class="llm-history-list">${payload.items.map(item => {
     const tokenText = item.token_usage_available ? `${Number(item.total_tokens || 0).toLocaleString()} tokens` : 'tokens unavailable';
-    return `<article class="llm-history-item"><div class="card-title-row"><div><strong>#${item.sequence} · ${esc(friendlyValue(item.phase || 'LLM'))}</strong><div class="hint">${esc(item.provider_type || 'LLM')}${item.model ? ` · ${esc(item.model)}` : ''} · ${esc(tokenText)} · ${esc(formatDuration(item.duration_ms))}</div></div>${item.error ? '<span class="badge error-badge">Error</span>' : '<span class="badge ok">Completed</span>'}</div><details><summary>Request</summary><pre>${esc(JSON.stringify(item.request || {}, null, 2))}</pre></details><details><summary>Response</summary><pre>${esc(JSON.stringify(item.response || {}, null, 2))}</pre></details>${item.error ? `<div class="investigation-error"><strong>LLM call failed</strong><p>${esc(item.error)}</p></div>` : ''}</article>`;
+    return `<article class="llm-history-item">
+      <div class="card-title-row">
+        <div><strong>#${item.sequence} · ${esc(friendlyValue(item.phase || 'LLM'))}</strong><div class="hint">${esc(item.provider_type || 'LLM')}${item.model ? ` · ${esc(item.model)}` : ''} · ${esc(tokenText)} · ${esc(formatDuration(item.duration_ms))}</div></div>
+        ${item.error ? '<span class="badge error-badge">Error</span>' : '<span class="badge ok">Completed</span>'}
+      </div>
+      <details>
+        <summary><span>Request</span><button type="button" class="copy-history-button" onclick="event.preventDefault();event.stopPropagation();copyLLMHistoryPart(${Number(item.sequence)}, 'request', this)">Copy request</button></summary>
+        <pre>${esc(JSON.stringify(item.request || {}, null, 2))}</pre>
+      </details>
+      <details>
+        <summary><span>Response</span><button type="button" class="copy-history-button" onclick="event.preventDefault();event.stopPropagation();copyLLMHistoryPart(${Number(item.sequence)}, 'response', this)">Copy response</button></summary>
+        <pre>${esc(JSON.stringify(item.response || {}, null, 2))}</pre>
+      </details>
+      ${item.error ? `<div class="investigation-error"><strong>LLM call failed</strong><p>${esc(item.error)}</p></div>` : ''}
+    </article>`;
   }).join('')}</div>`;
 }
-
 async function loadLLMHistory(investigationId) {
   const root = qs('#llm-history-content');
   if (!root) return;
   try {
     const payload = await api(`/investigations/${investigationId}/llm-history`);
+    currentLLMHistoryPayload = payload;
     root.innerHTML = renderLLMHistoryItems(payload);
   } catch (error) {
+    currentLLMHistoryPayload = null;
     root.innerHTML = `<div class="investigation-error"><strong>Unable to load LLM history</strong><p>${esc(error.message)}</p></div>`;
   }
 }
@@ -181,6 +273,7 @@ async function openInvestigation(id) {
         <button class="back-button" id="close-investigation">← Investigations</button>
         <div class="actions compact-actions">
           <span class="badge ${investigationStatusClass(item.status)}">${esc(friendlyValue(item.status || 'unknown'))}</span>
+          <button id="download-investigation-pdf" type="button">Download PDF</button>
           ${pending ? '<button id="refresh-investigation-detail">Refresh</button>' : ''}
           ${item.status === 'failed' && canRunInvestigationActions() ? '<button id="retry-investigation" class="primary">Retry</button>' : ''}
         </div>
@@ -219,6 +312,8 @@ async function openInvestigation(id) {
     qs('#investigations-list')?.classList.remove('hidden');
     qs('#investigations-view .section-head')?.classList.remove('hidden');
   };
+  const downloadButton = qs('#download-investigation-pdf');
+  if (downloadButton) downloadButton.onclick = () => downloadInvestigationPdf(id);
   const refreshButton = qs('#refresh-investigation-detail');
   if (refreshButton) refreshButton.onclick = () => openInvestigation(id).catch(error => toast(error.message));
   const retryButton = qs('#retry-investigation');

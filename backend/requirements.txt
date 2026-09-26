@@ -9,3 +9,4 @@ google-genai
 cryptography
 httpx
 pytest
+reportlab>=4.2,<5
