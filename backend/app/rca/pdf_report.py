@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import io
 import json
+import textwrap
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -158,7 +159,26 @@ def _paragraph(value: Any, style: ParagraphStyle) -> Paragraph:
 
 
 def _json_block(value: Any, style: ParagraphStyle) -> XPreformatted:
-    return XPreformatted(_safe_text(_json_text(value)), style, maxLineLength=118)
+    raw = _safe_text(_json_text(value))
+    wrapped_lines: list[str] = []
+    for line in raw.splitlines() or [""]:
+        if len(line) <= 118:
+            wrapped_lines.append(line)
+            continue
+        indent = line[: len(line) - len(line.lstrip())]
+        wrapped_lines.extend(
+            textwrap.wrap(
+                line,
+                width=118,
+                subsequent_indent=indent + "  ",
+                replace_whitespace=False,
+                drop_whitespace=False,
+                break_long_words=True,
+                break_on_hyphens=False,
+            )
+            or [line]
+        )
+    return XPreformatted("\n".join(wrapped_lines), style)
 
 
 def _metadata_table(rows: list[tuple[str, Any]], styles: dict[str, ParagraphStyle]) -> Table:
