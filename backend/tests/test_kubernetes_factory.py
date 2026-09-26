@@ -1,7 +1,9 @@
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from app.integrations.kubernetes.factory import KubernetesProviderFactory
+from app.integrations.kubernetes.provider import KubernetesProvider
 
 
 class KubernetesProviderFactoryTests(unittest.TestCase):
@@ -64,3 +66,67 @@ class KubernetesProviderFactoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_capability_discovery_detects_k3s_and_optional_apis():
+    provider = KubernetesProvider.__new__(KubernetesProvider)
+    provider.version_api = SimpleNamespace(
+        get_code=lambda: SimpleNamespace(git_version="v1.33.4+k3s1")
+    )
+    provider.core_api = SimpleNamespace(
+        get_api_versions=lambda: SimpleNamespace(versions=["v1"])
+    )
+    provider.apis_api = SimpleNamespace(
+        get_api_versions=lambda: SimpleNamespace(groups=[
+            SimpleNamespace(versions=[
+                SimpleNamespace(group_version="apps/v1"),
+            ]),
+            SimpleNamespace(versions=[
+                SimpleNamespace(group_version="batch/v1"),
+            ]),
+            SimpleNamespace(versions=[
+                SimpleNamespace(group_version="networking.k8s.io/v1"),
+            ]),
+            SimpleNamespace(versions=[
+                SimpleNamespace(group_version="storage.k8s.io/v1"),
+            ]),
+            SimpleNamespace(versions=[
+                SimpleNamespace(group_version="discovery.k8s.io/v1"),
+            ]),
+            SimpleNamespace(versions=[
+                SimpleNamespace(group_version="metrics.k8s.io/v1beta1"),
+            ]),
+        ])
+    )
+
+    profile = provider.discover_capabilities()
+
+    assert profile["server_version"] == "v1.33.4+k3s1"
+    assert profile["distribution"] == "k3s"
+    assert profile["capabilities"]["core_v1"] is True
+    assert profile["capabilities"]["apps_v1"] is True
+    assert profile["capabilities"]["metrics_v1beta1"] is True
+    assert profile["capabilities"]["autoscaling_v2"] is False
+
+
+def test_capability_discovery_degrades_to_unknown_when_api_group_discovery_fails():
+    provider = KubernetesProvider.__new__(KubernetesProvider)
+    provider.version_api = SimpleNamespace(
+        get_code=lambda: SimpleNamespace(git_version="v1.30.0")
+    )
+    provider.core_api = SimpleNamespace(
+        get_api_versions=lambda: SimpleNamespace(versions=["v1"])
+    )
+
+    def fail_discovery():
+        raise RuntimeError("discovery blocked")
+
+    provider.apis_api = SimpleNamespace(get_api_versions=fail_discovery)
+
+    profile = provider.discover_capabilities()
+
+    assert profile["distribution"] == "kubernetes"
+    assert profile["api_discovery_available"] is False
+    assert profile["capabilities"]["core_v1"] is True
+    assert profile["capabilities"]["apps_v1"] is None
+    assert "discovery blocked" in profile["discovery_error"]
