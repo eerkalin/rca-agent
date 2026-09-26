@@ -1441,3 +1441,55 @@ input:focus,select:focus,textarea:focus{box-shadow:0 0 0 4px rgba(10,132,255,.09
   .why-step{grid-template-columns:42px minmax(0,1fr)}
   .why-content{padding:16px 15px 16px 12px}
 }
+
+
+/* Connections + investigation utilities v5. */
+#connections-list.tile-grid{
+  grid-template-columns:repeat(auto-fill,minmax(250px,340px));
+  align-items:start;
+}
+#connections-list .connection-card{
+  min-height:118px;
+  padding:17px 18px;
+  border-radius:20px;
+}
+#connections-list .connection-card h3{
+  margin:0;
+  font-size:20px;
+  line-height:1.2;
+}
+#connections-list .connection-card .actions{
+  margin-top:14px;
+  padding-top:0;
+  gap:7px;
+}
+#connections-list .connection-card .actions button{
+  min-height:36px;
+  padding:8px 12px;
+}
+
+.llm-history-item details summary{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+.copy-history-button{
+  min-height:30px!important;
+  padding:5px 9px!important;
+  border-radius:9px!important;
+  font-size:10px!important;
+  font-weight:720!important;
+}
+#download-investigation-pdf{
+  white-space:nowrap;
+}
+
+@media(max-width:760px){
+  #connections-list.tile-grid{
+    grid-template-columns:1fr;
+  }
+  #connections-list .connection-card{
+    min-height:0;
+  }
+}
