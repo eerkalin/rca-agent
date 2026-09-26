@@ -1,4 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 
@@ -10,6 +11,7 @@ def _duration_ms(started_at, finished_at) -> int | None:
 from app.applications.repository import ApplicationRepository
 from app.db.session import SessionLocal
 from app.rca.orchestrator import RCAOrchestrator
+from app.rca.pdf_report import build_investigation_pdf
 from app.rca.repository import InvestigationRepository, LLMInteractionRepository
 
 
@@ -143,6 +145,39 @@ async def retry_investigation(
         "status": "queued",
         "retry": True,
     }
+
+
+@router.get("/{investigation_id}/export.pdf")
+async def export_investigation_pdf(investigation_id: int):
+    with SessionLocal() as db:
+        investigation = InvestigationRepository.get_by_id(db, investigation_id)
+        if investigation is None:
+            raise HTTPException(status_code=404, detail="Investigation not found")
+
+        application = (
+            ApplicationRepository.get(db, investigation.application_id)
+            if investigation.application_id is not None
+            else None
+        )
+        history = (
+            LLMInteractionRepository.list_for_investigation(db, investigation_id)
+            if investigation.llm_history_enabled
+            else []
+        )
+        pdf = build_investigation_pdf(
+            investigation,
+            application_name=getattr(application, "name", None),
+            llm_history=history,
+        )
+
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="rca-investigation-{investigation_id}.pdf"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.get("/{investigation_id}")
