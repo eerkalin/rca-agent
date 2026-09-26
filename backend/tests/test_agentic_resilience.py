@@ -271,3 +271,35 @@ def test_agentic_transport_preserves_raw_kubernetes_pods_without_health_classifi
     assert [pod["name"] for pod in pods] == ["ready", "broken"]
     assert pods[1]["conditions"][0]["status"] == "False"
     assert "problem_pods_count" not in transported[0]["kubernetes"]
+
+
+def test_executor_has_no_hidden_namespace_health_operation():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "rca"
+        / "orchestrator.py"
+    ).read_text()
+
+    assert 'if operation == "namespace_health"' not in source
+    assert "operation is not advertised for this tool/cluster" in source
+    assert "allowed_operations" in source
+
+
+def test_kubernetes_catalog_is_the_authoritative_operation_surface():
+    operations = RCAOrchestrator._kubernetes_operations({
+        "core_v1": True,
+        "apps_v1": True,
+        "batch_v1": True,
+        "autoscaling_v2": True,
+        "policy_v1": True,
+        "networking_v1": True,
+        "storage_v1": True,
+        "discovery_v1": True,
+        "metrics_v1beta1": True,
+    })
+    names = [item["name"] for item in operations]
+
+    assert "list_pods" in names
+    assert "namespace_health" not in names
+    assert len(names) == len(set(names))
