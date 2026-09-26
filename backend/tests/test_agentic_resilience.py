@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
 from app.rca.agentic_models import AgenticDecision, parse_agentic_decision_text
+from app.rca.evidence_reducer import EvidenceReducer
+from app.rca.tool_policy import ToolPolicy
 from app.rca.rca_normalizer import normalize_rca_payload
 
 
@@ -142,3 +144,30 @@ def test_agentic_decision_parser_accepts_markdown_fence_for_provider_robustness(
 
     assert decision.stop is True
     assert decision.choices == []
+
+
+def test_log_reducer_redacts_common_credentials():
+    text = (
+        "Authorization: Bearer secret-token\n"
+        "password=hunter2\n"
+        "api_key: abc123\n"
+        "jwt eyJabcdefghijk.abcdefghijk.abcdefghijk"
+    )
+
+    compact = EvidenceReducer._compact_log(text)
+
+    assert "secret-token" not in compact
+    assert "hunter2" not in compact
+    assert "abc123" not in compact
+    assert "<redacted>" in compact
+    assert "<redacted-jwt>" in compact
+
+
+def test_kubernetes_policy_allows_deep_reads_but_denies_mutation():
+    ToolPolicy.assert_allowed("kubernetes", "get_pod_resources")
+    ToolPolicy.assert_allowed("kubernetes", "get_node")
+    ToolPolicy.assert_allowed("kubernetes", "get_storage")
+
+    import pytest
+    with pytest.raises(PermissionError):
+        ToolPolicy.assert_allowed("kubernetes", "delete_pod")
