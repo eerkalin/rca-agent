@@ -12,6 +12,30 @@ class EvidenceReducer:
     MAX_TRACES = 5
     MAX_TRACE_DOCUMENTS = 80
 
+    @staticmethod
+    def _redact_text(value: str) -> str:
+        value = re.sub(
+            r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
+            r"\1<redacted>",
+            value,
+        )
+        value = re.sub(
+            r"(?i)\b(password|passwd|token|api[_-]?key|client[_-]?secret)\b(\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;]+)",
+            r"\1\2<redacted>",
+            value,
+        )
+        value = re.sub(
+            r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
+            "<redacted-jwt>",
+            value,
+        )
+        value = re.sub(
+            r"(?i)(https?://[^\s/:]+:)[^@\s/]+@",
+            r"\1<redacted>@",
+            value,
+        )
+        return value
+
     @classmethod
     def _compact_log(cls, value: str | None) -> str | None:
         if not value:
@@ -27,22 +51,7 @@ class EvidenceReducer:
             compact_lines.append(normalized[:2000])
         compact = "\n".join(compact_lines)
         # Logs are untrusted evidence and may accidentally contain credentials.
-        # Redact common credential shapes before any text is sent to an LLM or transcript.
-        compact = re.sub(
-            r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
-            r"\1<redacted>",
-            compact,
-        )
-        compact = re.sub(
-            r"(?i)\b(password|passwd|token|api[_-]?key|client[_-]?secret)\b(\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;]+)",
-            r"\1\2<redacted>",
-            compact,
-        )
-        compact = re.sub(
-            r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
-            "<redacted-jwt>",
-            compact,
-        )
+        compact = cls._redact_text(compact)
         if len(compact) > cls.MAX_LOG_CHARS:
             compact = compact[-cls.MAX_LOG_CHARS :]
             compact = "[truncated to most recent evidence]\n" + compact
@@ -67,8 +76,11 @@ class EvidenceReducer:
             if len(value) > len(items):
                 result.append({"_truncated_items": len(value) - len(items)})
             return result
-        if isinstance(value, str) and len(value) > 8000:
-            return value[:8000] + "\n[diagnostic text truncated]"
+        if isinstance(value, str):
+            value = cls._redact_text(value)
+            if len(value) > 8000:
+                return value[:8000] + "\n[diagnostic text truncated]"
+            return value
         return value
 
     @classmethod
