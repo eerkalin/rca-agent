@@ -150,12 +150,16 @@ class RCAOrchestrator:
         return provider
 
     @staticmethod
-    def _analyze(query: str, evidence: list[dict], context: dict, llm):
-        reduced = EvidenceReducer.reduce(evidence)
+    def _analyze(query: str, evidence: list[dict], context: dict, llm, *, preserve_transport: bool = False):
+        llm_evidence = (
+            EvidenceReducer.transport(evidence)
+            if preserve_transport
+            else EvidenceReducer.reduce(evidence)
+        )
         compact_context = RCAOrchestrator._llm_application_context(context)
-        log_event(logger, logging.INFO, "rca.analysis.start", "Starting LLM RCA analysis", evidence_items=len(evidence), reduced_evidence_items=len(reduced))
+        log_event(logger, logging.INFO, "rca.analysis.start", "Starting LLM RCA analysis", evidence_items=len(evidence), llm_evidence_items=len(llm_evidence), preserve_transport=preserve_transport)
         started = time.perf_counter()
-        result = llm.analyze_rca(symptom=query, evidence=reduced, application_context=compact_context)
+        result = llm.analyze_rca(symptom=query, evidence=llm_evidence, application_context=compact_context)
         log_event(logger, logging.INFO, "rca.analysis.complete", "LLM RCA analysis completed", elapsed_ms=elapsed_ms(started), insufficient_evidence=result.insufficient_evidence, why_steps=len(result.five_whys or []))
         return result
 
@@ -549,8 +553,8 @@ class RCAOrchestrator:
         arguments: dict,
         observations: list[dict],
     ) -> str:
-        reduced = EvidenceReducer.reduce(observations)
-        operation = arguments.get("operation") or "configured_collection"
+        transported = EvidenceReducer.transport(observations)
+        operation = arguments.get("operation") or "<missing>"
         return (
             f"ROUND {round_number} TOOL REQUEST\n"
             f"tool_key: {tool_key}\n"
@@ -558,7 +562,7 @@ class RCAOrchestrator:
             f"reason: {reason or 'No reason provided'}\n"
             f"arguments: {json.dumps(arguments or {}, ensure_ascii=False, default=str)}\n\n"
             f"ROUND {round_number} TOOL RESPONSE\n"
-            f"{json.dumps(reduced, ensure_ascii=False, default=str)}"
+            f"{json.dumps(transported, ensure_ascii=False, default=str)}"
         )
 
     @staticmethod
@@ -615,7 +619,9 @@ class RCAOrchestrator:
             provider_type = tool.get("provider_type")
             tool_type = tool.get("tool_type")
             config = tool.get("config") or {}
-            operation = str((arguments or {}).get("operation") or "configured_collection")
+            operation = str((arguments or {}).get("operation") or "").strip()
+            if not operation:
+                raise ValueError("LLM tool request must include an explicit operation")
             base = {
                 "tool": descriptor,
                 "dependency": (
@@ -724,10 +730,33 @@ class RCAOrchestrator:
             )
 
         provider = self._kubernetes_provider(db, tool)
-        operation = str((arguments or {}).get("operation") or "namespace_health")
+        operation = str((arguments or {}).get("operation") or "").strip()
+        if not operation:
+            raise ValueError("LLM Kubernetes request must include an explicit operation")
         descriptor = self._tool_descriptor(tool)
         tail_lines = int((tool.get("config") or {}).get("tail_lines", 50))
 
+        if operation == "list_pods":
+            requested_namespace = (arguments or {}).get("namespace")
+            if requested_namespace:
+                namespaces = [self._validate_agentic_namespace(tool, requested_namespace)]
+            else:
+                namespaces = self._configured_namespaces(tool)
+                if not namespaces:
+                    raise ValueError("Kubernetes tool has no configured namespace scope")
+            snapshot = self.evidence_collector.collect_namespace_pods(
+                kubernetes=provider,
+                namespaces=namespaces,
+            )
+            return [{
+                "tool": descriptor,
+                "agentic_arguments": {"operation": operation, "namespaces": namespaces},
+                "scope_candidate": {},
+                "kubernetes": snapshot,
+            }]
+
+        # Kept only for backward compatibility with old stored/replayed planner
+        # responses. It is intentionally not advertised in the current tool catalog.
         if operation == "namespace_health":
             requested_namespace = (arguments or {}).get("namespace")
             if requested_namespace:
@@ -997,16 +1026,16 @@ class RCAOrchestrator:
         raise ValueError(f"Unsupported Kubernetes agentic operation: {operation}")
 
     def _run_agentic(self, db: Session, investigation, context: dict, llm):
-        catalog, bindings = self._agentic_tool_catalog(context)
+        catalog, bindings = self._agentic_tool_catalog(db, context)
         if not catalog:
             raise ValueError("Application has no executable read-only tools")
 
         evidence: list[dict] = []
-        executed_signatures: list[str] = []
+        planner_stopped = False
         transcript_parts: list[str] = []
         decisions: list[dict] = []
         planner_context = self._llm_application_context(context)
-        max_rounds = 6
+        max_rounds = 12
 
         for round_number in range(1, max_rounds + 1):
             transcript_text = self._bounded_agentic_transcript(transcript_parts)
@@ -1019,6 +1048,7 @@ class RCAOrchestrator:
             decisions.append({"round": round_number, **decision.model_dump(exclude_none=True)})
 
             if decision.stop:
+                planner_stopped = True
                 break
 
             executed_this_round = 0
@@ -1033,19 +1063,14 @@ class RCAOrchestrator:
                         investigation_id=investigation.id,
                         tool_key=choice.tool_key,
                     )
-                    continue
-
-                arguments = choice.arguments_dict()
-                signature = self._choice_signature(choice.tool_key, arguments)
-                if signature in executed_signatures:
                     transcript_parts.append(
                         f"ROUND {round_number} TOOL REQUEST REJECTED\n"
                         f"tool_key: {choice.tool_key}\n"
-                        f"arguments: {json.dumps(arguments, ensure_ascii=False, default=str)}\n"
-                        "reason: identical tool call already exists in the transcript"
+                        "reason: tool_key is not in AVAILABLE READ-ONLY TOOLS"
                     )
                     continue
 
+                arguments = choice.arguments_dict()
                 tool, dependency = binding
                 try:
                     observations = self._execute_agentic_choice(
@@ -1073,16 +1098,26 @@ class RCAOrchestrator:
                         observations=observations,
                     )
                 )
-                executed_signatures.append(signature)
                 executed_this_round += 1
 
             if executed_this_round == 0 and not decision.choices:
                 transcript_parts.append(
                     f"ROUND {round_number} PLANNER RESPONSE\n"
-                    "No executable tool choice was requested. RCA Agent did not choose a tool on the LLM's behalf."
+                    "stop=false but no tool choices were supplied. No tool was chosen by RCA Agent."
                 )
 
-        rca = self._analyze(investigation.query, evidence, context, llm)
+        if not planner_stopped:
+            raise ValueError(
+                f"LLM planner did not return stop=true within the safety limit of {max_rounds} rounds"
+            )
+
+        rca = self._analyze(
+            investigation.query,
+            evidence,
+            context,
+            llm,
+            preserve_transport=True,
+        )
         return evidence, decisions, rca
 
     @staticmethod
