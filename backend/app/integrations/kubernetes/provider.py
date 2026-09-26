@@ -815,6 +815,98 @@ class KubernetesProvider:
             })
         return item
 
+    def get_namespace_deep_inventory(self, namespace: str) -> dict:
+        """Return bounded resource discovery metadata without Secret/ConfigMap contents."""
+        inventory = self.get_inventory(namespace=namespace)
+        jobs = self.batch_v1.list_namespaced_job(namespace=namespace)
+        cronjobs = self.batch_v1.list_namespaced_cron_job(namespace=namespace)
+        pvcs = self.core_v1.list_namespaced_persistent_volume_claim(namespace=namespace)
+        ingresses = self.networking_v1.list_namespaced_ingress(namespace=namespace)
+        hpas = self.autoscaling_v2.list_namespaced_horizontal_pod_autoscaler(namespace=namespace)
+        pdbs = self.policy_v1.list_namespaced_pod_disruption_budget(namespace=namespace)
+        return {
+            "namespace": namespace,
+            "deployments": inventory.get("deployments", [])[:100],
+            "statefulsets": inventory.get("statefulsets", [])[:100],
+            "daemonsets": inventory.get("daemonsets", [])[:100],
+            "services": inventory.get("services", [])[:100],
+            "jobs": [
+                {
+                    "name": item.metadata.name,
+                    "owner_references": self._owner_references(item.metadata),
+                    "active": getattr(item.status, "active", None),
+                    "succeeded": getattr(item.status, "succeeded", None),
+                    "failed": getattr(item.status, "failed", None),
+                    "conditions": self.api_client.sanitize_for_serialization(
+                        getattr(item.status, "conditions", None) or []
+                    ),
+                }
+                for item in jobs.items[:100]
+            ],
+            "cronjobs": [
+                {
+                    "name": item.metadata.name,
+                    "suspend": item.spec.suspend,
+                    "schedule": item.spec.schedule,
+                    "last_schedule_time": (
+                        item.status.last_schedule_time.isoformat()
+                        if item.status and item.status.last_schedule_time else None
+                    ),
+                    "active_jobs": [
+                        ref.name for ref in ((item.status.active or []) if item.status else [])
+                    ],
+                }
+                for item in cronjobs.items[:100]
+            ],
+            "persistent_volume_claims": [
+                {
+                    "name": item.metadata.name,
+                    "phase": item.status.phase if item.status else None,
+                    "storage_class_name": item.spec.storage_class_name,
+                    "volume_name": item.spec.volume_name,
+                    "access_modes": list(item.spec.access_modes or []),
+                    "requested": dict(
+                        (item.spec.resources.requests or {})
+                        if item.spec.resources else {}
+                    ),
+                    "capacity": dict(
+                        (item.status.capacity or {})
+                        if item.status else {}
+                    ),
+                }
+                for item in pvcs.items[:100]
+            ],
+            "ingresses": [
+                {
+                    "name": item.metadata.name,
+                    "ingress_class_name": item.spec.ingress_class_name,
+                    "hosts": [
+                        rule.host for rule in (item.spec.rules or []) if rule.host
+                    ],
+                }
+                for item in ingresses.items[:100]
+            ],
+            "horizontal_pod_autoscalers": [
+                {
+                    "name": item.metadata.name,
+                    "target_kind": item.spec.scale_target_ref.kind,
+                    "target_name": item.spec.scale_target_ref.name,
+                    "current_replicas": item.status.current_replicas if item.status else None,
+                    "desired_replicas": item.status.desired_replicas if item.status else None,
+                }
+                for item in hpas.items[:100]
+            ],
+            "pod_disruption_budgets": [
+                {
+                    "name": item.metadata.name,
+                    "current_healthy": item.status.current_healthy if item.status else None,
+                    "desired_healthy": item.status.desired_healthy if item.status else None,
+                    "disruptions_allowed": item.status.disruptions_allowed if item.status else None,
+                }
+                for item in pdbs.items[:100]
+            ],
+        }
+
     def get_pod_deep_diagnostics(self, namespace: str, pod_name: str) -> dict:
         pod = self.core_v1.read_namespaced_pod(name=pod_name, namespace=namespace)
         spec = pod.spec
