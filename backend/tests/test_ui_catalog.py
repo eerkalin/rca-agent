@@ -110,8 +110,8 @@ def test_ui_assets_are_cache_busted_and_icons_are_hard_sized():
     index_html = (ui_dir / "index.html").read_text()
     styles = (ui_dir / "styles.css").read_text()
 
-    assert "/ui/styles.css?v=20260926-1" in index_html
-    assert "/ui/app.js?v=20260926-1" in index_html
+    assert "/ui/styles.css?v=20260926-2" in index_html
+    assert "/ui/app.js?v=20260926-2" in index_html
     assert 'width="24" height="24"' in index_html
     assert 'width="17" height="17"' in index_html
     assert "Premium workspace v3" in styles
@@ -126,3 +126,19 @@ def test_failed_investigation_has_same_id_retry_control():
     assert "/investigations/${id}/retry" in source
     assert "Retry investigation" in source
     assert "canRunInvestigationActions()" in source
+
+
+def test_investigation_history_copy_pdf_and_connection_save_regressions():
+    ui_dir = Path(__file__).resolve().parents[1] / "app" / "ui"
+    investigations_js = (ui_dir / "investigations-ui.js").read_text()
+    app_js = (ui_dir / "app.js").read_text()
+    styles = (ui_dir / "styles.css").read_text()
+
+    assert "copyLLMHistoryPart" in investigations_js
+    assert "Copy request" in investigations_js
+    assert "Copy response" in investigations_js
+    assert "/investigations/${id}/export.pdf" in investigations_js
+    assert 'id="download-investigation-pdf"' in investigations_js
+    assert "await refresh();if(typeof closeConnectionDetail==='function')closeConnectionDetail()" in app_js
+    assert "#connections-list .connection-card" in styles
+    assert "min-height:118px" in styles
