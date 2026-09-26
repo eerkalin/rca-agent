@@ -58,6 +58,25 @@ class EvidenceReducer:
         return compact
 
     @classmethod
+    def redact_untrusted(cls, value, *, depth: int = 0):
+        """Redact common credentials before untrusted evidence is persisted or displayed."""
+        if depth > 24:
+            return "[nested evidence redacted]"
+        if isinstance(value, dict):
+            return {
+                key: cls.redact_untrusted(child, depth=depth + 1)
+                for key, child in value.items()
+            }
+        if isinstance(value, list):
+            return [
+                cls.redact_untrusted(child, depth=depth + 1)
+                for child in value
+            ]
+        if isinstance(value, str):
+            return cls._redact_text(value)
+        return value
+
+    @classmethod
     def _bounded_value(cls, value, *, depth: int = 0):
         """Bound provider-produced diagnostic JSON before it is placed in the LLM transcript."""
         if depth > 8:
